@@ -1390,8 +1390,15 @@ function App() {
 
       // After the walletSig is ready, re-read the current provider/signer
       // (user may have switched wallets for gas).
-      const submitProvider = new ethers.BrowserProvider(getEthereumObject() ?? eth);
-      const submitSigner  = await submitProvider.getSigner();
+      // Use eth_accounts (no prompt) then getSigner(address) to avoid
+      // triggering eth_requestAccounts which pops a login/auth dialog.
+      const submitEth = getEthereumObject() ?? eth;
+      const submitProvider = new ethers.BrowserProvider(submitEth);
+      const gasAccounts: string[] = await submitEth.request({ method: 'eth_accounts' });
+      if (!gasAccounts || gasAccounts.length === 0) {
+        throw new Error('No wallet connected. Please connect a wallet with gas to submit the transaction.');
+      }
+      const submitSigner = await submitProvider.getSigner(gasAccounts[0]);
 
       // 8. Submit — msg.sender can be any gas-paying wallet
       // WOTS+ verification is gas-heavy (~67 hash-chains + 8-level Merkle proof).
@@ -1593,8 +1600,13 @@ function App() {
         });
       }
 
-      const submitProvider2 = new ethers.BrowserProvider(getEthereumObject() ?? eth);
-      const submitSigner2   = await submitProvider2.getSigner();
+      const submitEth2 = getEthereumObject() ?? eth;
+      const submitProvider2 = new ethers.BrowserProvider(submitEth2);
+      const gasAccounts2: string[] = await submitEth2.request({ method: 'eth_accounts' });
+      if (!gasAccounts2 || gasAccounts2.length === 0) {
+        throw new Error('No wallet connected. Please connect a wallet with gas to submit the transaction.');
+      }
+      const submitSigner2 = await submitProvider2.getSigner(gasAccounts2[0]);
 
       const accountSigner = new ethers.Contract(accountAddress, ACCOUNT_ABI, submitSigner2);
       const tx = await accountSigner.directExecute(

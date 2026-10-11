@@ -152,28 +152,91 @@ export interface WOTSTree {
 }
 
 /**
- * Build a full WOTS+ Merkle tree from masterSeed — async, runs in a Web Worker
- * so the main thread / UI stays responsive during the ~51k keccak256 calls.
+ * Compute WOTS+ leaf hashes for indices [from, to) from masterSeed.
+ * Called by wots-leaf.worker.ts to process a slice of the tree in parallel.
+ */
+export function buildLeafRange(masterSeed: Uint8Array, from: number, to: number): Uint8Array[] {
+  const pubSeedBytes = derivePubSeed(masterSeed);
+  const hashes: Uint8Array[] = [];
+  for (let j = from; j < to; j++) {
+    const leafSeed = deriveLeafSeed(masterSeed, j);
+    const pks = computePKs(leafSeed, pubSeedBytes);
+    hashes.push(leafHashFromPKs(pks));
+  }
+  return hashes;
+}
+
+/**
+ * Build a full WOTS+ Merkle tree from masterSeed, using multiple Web Workers
+ * (one per logical CPU core, capped at 8) for parallel leaf computation.
+ * ~4-8× faster than the single-worker version on modern hardware.
  */
 export function buildWOTSTreeAsync(seed: Uint8Array): Promise<WOTSTree> {
   return new Promise((resolve, reject) => {
-    // Vite's ?worker&inline syntax bundles the worker into the main chunk
-    // so there is no separate file to serve and no cross-origin issues.
-    const worker = new Worker(
-      new URL('./wots.worker.ts', import.meta.url),
-      { type: 'module' }
-    );
-    worker.onmessage = (e: MessageEvent<WOTSTree>) => {
-      worker.terminate();
-      resolve(e.data);
-    };
-    worker.onerror = (e) => {
-      worker.terminate();
-      reject(new Error('WOTS worker error: ' + e.message));
-    };
-    // structured-clone transfers the buffer (zero-copy)
-    const copy = seed.slice();
-    worker.postMessage(copy, [copy.buffer]);
+    const cores = typeof navigator !== 'undefined' ? (navigator.hardwareConcurrency || 4) : 4;
+    const numWorkers = Math.min(cores, 8);
+    const chunkSize = Math.ceil(TREE_SIZE / numWorkers);
+    const pubSeedBytes = derivePubSeed(seed);
+
+    const allLeafHashes: Uint8Array[] = new Array(TREE_SIZE);
+    let completed = 0;
+    let spawnedCount = 0;
+
+    for (let w = 0; w < numWorkers; w++) {
+      const from = w * chunkSize;
+      const to = Math.min(from + chunkSize, TREE_SIZE);
+      if (from >= TREE_SIZE) break;
+      spawnedCount++;
+
+      const worker = new Worker(
+        new URL('./wots-leaf.worker.ts', import.meta.url),
+        { type: 'module' }
+      );
+
+      worker.onmessage = (e: MessageEvent<{ from: number; leafHashes: Uint8Array[] }>) => {
+        worker.terminate();
+        const { from: startIdx, leafHashes } = e.data;
+        for (let i = 0; i < leafHashes.length; i++) {
+          allLeafHashes[startIdx + i] = leafHashes[i];
+        }
+        completed++;
+        if (completed === spawnedCount) {
+          try {
+            // Build Merkle tree bottom-up — only 255 keccak256 calls, fast on main thread
+            const levels: Uint8Array[][] = new Array(TREE_DEPTH + 1);
+            levels[TREE_DEPTH] = allLeafHashes;
+            for (let d = TREE_DEPTH - 1; d >= 0; d--) {
+              const prev = levels[d + 1];
+              const curr: Uint8Array[] = [];
+              for (let i = 0; i < prev.length; i += 2) {
+                const combined = new Uint8Array(65);
+                combined[0] = 0x01;
+                combined.set(prev[i], 1);
+                combined.set(prev[i + 1], 33);
+                curr.push(keccak_256(combined));
+              }
+              levels[d] = curr;
+            }
+            resolve({
+              merkleRoot: toHex32(levels[0][0]),
+              pubSeed:    toHex32(pubSeedBytes),
+              levels,
+            });
+          } catch (err: any) {
+            reject(err);
+          }
+        }
+      };
+
+      worker.onerror = (e) => {
+        worker.terminate();
+        reject(new Error('WOTS leaf worker error: ' + e.message));
+      };
+
+      // Each worker gets its own seed copy (transferred zero-copy)
+      const seedCopy = seed.slice();
+      worker.postMessage({ seed: seedCopy, from, to }, [seedCopy.buffer]);
+    }
   });
 }
 

@@ -5,6 +5,7 @@ import { flushSync } from 'react-dom';
 import { getFactoryAddress, chainHasFactory, getChainTokens, UserState, VaultState, TokenInfo, CHAINS } from './types';
 import { deriveArgon2Key } from './services/cryptoService';
 import { buildWOTSTreeAsync, prepareDirectExecSig, hexToBytes } from './services/wotsService';
+import type { WOTSTree } from './services/wotsService';
 import { X, ShieldCheck, AlertTriangle, Info } from './components/Icons';
 import { useLanguage } from './contexts/LanguageContext';
 

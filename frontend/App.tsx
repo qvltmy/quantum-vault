@@ -895,20 +895,6 @@ function App() {
     return () => clearInterval(intervalId);
   }, [user.isConnected, isDemoMode, vaultAddress, refreshVault]);
 
-  useEffect(() => {
-    const eth = getEthereumObject();
-    if (!eth || !user.isConnected || !vaultAddress || !accountAddress) return;
-    let cancelled = false;
-    const provider = new ethers.BrowserProvider(eth);
-    const handleBlock = () => {
-      if (!cancelled) void refreshVault(true);
-    };
-    provider.on('block', handleBlock);
-    return () => {
-      cancelled = true;
-      void provider.removeListener('block', handleBlock);
-    };
-  }, [getEthereumObject, user.isConnected, vaultAddress, accountAddress, refreshVault]);
 
   const fetchUserTokenBalance = useCallback(async (tokenAddress: string): Promise<string> => {
     if (!user.address) return "0";

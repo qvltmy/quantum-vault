@@ -61,19 +61,17 @@ const ProcessModal: React.FC<ProcessModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-[100] flex items-end sm:items-center justify-center p-0 sm:p-6 animate-fade-in">
+    <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 sm:p-6 animate-fade-in">
       <div 
         className={`absolute inset-0 bg-black/80 backdrop-blur-md transition-opacity ${isSuccess || isError ? 'cursor-pointer' : ''}`} 
         onClick={handleBackdropClick}
       />
       
       <div 
-        className="relative w-full sm:max-w-md quantum-card bg-[#0b1424] border border-cyan-300/25 rounded-t-3xl sm:rounded-3xl shadow-2xl overflow-hidden animate-fade-in-up max-h-[92dvh] flex flex-col"
+        className="relative w-full sm:max-w-md quantum-card bg-[#0b1424] border border-cyan-300/25 rounded-3xl shadow-2xl overflow-hidden animate-fade-in-up max-h-[88dvh] flex flex-col"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="absolute top-0 left-0 right-0 h-32 bg-gradient-to-b from-cyan-900/20 to-transparent pointer-events-none" />
-        {/* Mobile drag handle */}
-        <div className="sm:hidden w-10 h-1 bg-slate-600 rounded-full mx-auto mt-3 mb-1 shrink-0" />
         
         <div className="relative p-5 sm:p-8 overflow-y-auto flex-1">
           <div className="text-center mb-8">

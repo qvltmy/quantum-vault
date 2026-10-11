@@ -1485,6 +1485,16 @@ function App() {
       refreshVault();
     } catch (e: any) {
       const msg: string = e?.message || String(e);
+      const isUserCancel =
+        msg.includes('User rejected') ||
+        msg.includes('user rejected') ||
+        msg.includes('User denied') ||
+        msg.includes('user denied') ||
+        msg.includes('cancelled') ||
+        msg.includes('Cancelled') ||
+        msg.includes('Signature cancelled') ||
+        e?.code === 4001;
+
       const isWrongPw =
         msg.includes('wrong password') ||
         msg.includes('Wrong password') ||
@@ -1492,7 +1502,9 @@ function App() {
         msg.includes('invalidpasswordproof') ||
         msg.includes('InvalidPasswordProof');
 
-      if (isWrongPw) {
+      if (isUserCancel) {
+        setProcessState(prev => ({ ...prev, isOpen: false }));
+      } else if (isWrongPw) {
         // Wrong password — close process modal, re-open password modal with inline error
         setProcessState(prev => ({ ...prev, isOpen: false }));
         setShowPwModal(prev => ({
@@ -1686,6 +1698,16 @@ function App() {
       setLastSuccessTime(Date.now());
     } catch (e: any) {
       const msg: string = e?.message || String(e);
+      const isUserCancel =
+        msg.includes('User rejected') ||
+        msg.includes('user rejected') ||
+        msg.includes('User denied') ||
+        msg.includes('user denied') ||
+        msg.includes('cancelled') ||
+        msg.includes('Cancelled') ||
+        msg.includes('Signature cancelled') ||
+        e?.code === 4001;
+
       const isWrongPw =
         msg.includes('Wrong current password') ||
         msg.includes('wrong current password') ||
@@ -1694,7 +1716,9 @@ function App() {
         msg.includes('invalidpasswordproof') ||
         msg.includes('InvalidPasswordProof');
 
-      if (isWrongPw) {
+      if (isUserCancel) {
+        setProcessState(prev => ({ ...prev, isOpen: false }));
+      } else if (isWrongPw) {
         setProcessState(prev => ({ ...prev, isOpen: false }));
         setShowPwModal(prev => ({
           ...prev,

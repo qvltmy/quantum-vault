@@ -49,10 +49,11 @@ export interface ChainConfig {
   nativeCurrency?: { name: string; symbol: string; decimals: number };
 }
 
-// New factory (V2, all chains): 0xb473acF11db7F27F59213C7FE07D47d0eC569744
-// Deployed via CREATE2 with fixed salt — same address on every chain.
-// evm_version=cancun, solc 0.8.28+commit.7893614a, via_ir, optimizer 200
-export const FACTORY_ADDRESS = '0xb473acF11db7F27F59213C7FE07D47d0eC569744';
+// Factory V6 (current, all chains): 0x693671914331B6FaaCEeD66A805D33aa95D8808D
+// Deployed via CREATE2 salt keccak256("QuantumVaultAccountFactoryV6")
+// evm_version=cancun, bytecode_hash=none, via_ir=true, optimizer 200
+// Etherscan verified: ETH/BSC/Base/Arbitrum/Polygon | Sourcify: Robinhood(4663)
+export const FACTORY_ADDRESS = '0x693671914331B6FaaCEeD66A805D33aa95D8808D';
 
 export const CHAINS: ChainConfig[] = [
   {
@@ -78,7 +79,7 @@ export const CHAINS: ChainConfig[] = [
     label: 'Ethereum Mainnet',
     ticker: 'ETH',
     rpc: 'https://ethereum.publicnode.com',
-    rpcUrls: ['https://ethereum.publicnode.com', 'https://eth.llamarpc.com'],
+    rpcUrls: ['https://ethereum.publicnode.com', 'https://rpc.ankr.com/eth'],
     active: true,
     color: '#627EEA',
     explorer: 'https://etherscan.io',
@@ -130,7 +131,7 @@ export const CHAINS: ChainConfig[] = [
     label: 'Polygon',
     ticker: 'POL',
     rpc: 'https://polygon-bor-rpc.publicnode.com',
-    rpcUrls: ['https://polygon-bor-rpc.publicnode.com', 'https://polygon-rpc.com'],
+    rpcUrls: ['https://polygon-bor-rpc.publicnode.com', 'https://rpc.ankr.com/polygon'],
     active: true,
     color: '#8247E5',
     explorer: 'https://polygonscan.com',

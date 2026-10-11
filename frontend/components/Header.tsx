@@ -210,7 +210,7 @@ const Header: React.FC<HeaderProps> = ({
                           <span className="text-[11px] text-slate-400 font-mono">{myVaults.length} total</span>
                         </div>
                         <div className="max-h-64 overflow-y-auto p-2 space-y-1">
-                          {myVaults.map((v, i) => {
+                          {myVaults.filter(v => v?.account && v?.vault).map((v, i) => {
                             const isActive = activeAccount?.toLowerCase() === v.account.toLowerCase();
                             return (
                               <button
@@ -355,7 +355,7 @@ const Header: React.FC<HeaderProps> = ({
             <div className="space-y-2">
               <span className="text-[11px] font-bold text-slate-400 uppercase tracking-widest px-1">My Vaults</span>
               <div className="space-y-1.5 max-h-48 overflow-y-auto">
-                {myVaults.map((v, i) => {
+                {myVaults.filter(v => v?.account && v?.vault).map((v, i) => {
                   const isActive = activeAccount?.toLowerCase() === v.account.toLowerCase();
                   return (
                     <button

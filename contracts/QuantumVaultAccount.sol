@@ -11,23 +11,26 @@ import {
     _packValidationData
 } from "@account-abstraction/core/Helpers.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 import {MessageHashUtils} from "@openzeppelin/contracts/utils/cryptography/MessageHashUtils.sol";
 
 import {WOTSVerifier} from "./WOTSVerifier.sol";
-import {QuantumVault} from "./QuantumVault.sol";
 
 /// @title QuantumVaultAccount — WOTS+ post-quantum ERC-4337 smart account
 /// @notice Dual-factor auth: WOTS+ password proof (Factor 1) + wallet ECDSA sig (Factor 2).
+///         Assets are held directly by this account — no separate vault contract.
 ///
 /// @dev Gas-separation: the authorized wallet signs opHash via personal_sign (no gas),
 ///      then any address submits directExecute with that sig. Allows authorized wallets
-///      with zero ETH to control the vault.
+///      with zero ETH to control the account.
 ///
 ///      Key rotation: when inbandNewRoot is non-zero, new root is registered and old
 ///      non-primary root is removed atomically within the same operation.
 ///      Client triggers rotation automatically when < 5% of leaves remain.
-contract QuantumVaultAccount is BaseAccount, IAccountExecute {
+contract QuantumVaultAccount is BaseAccount, IAccountExecute, ReentrancyGuard {
+    using SafeERC20 for IERC20;
 
     error OnlyEntryPoint();
     error ZeroRoot();
@@ -38,7 +41,8 @@ contract QuantumVaultAccount is BaseAccount, IAccountExecute {
     error CannotRemovePrimary();
     error LeafAlreadySpent();
     error InvalidPasswordProof();
-    error VaultForwardFailed();
+    error TransferFailed();
+    error InsufficientBalance();
     error Unauthorized();
     error AlreadyWalletAdmin();
     error NotWalletAdmin();
@@ -48,7 +52,7 @@ contract QuantumVaultAccount is BaseAccount, IAccountExecute {
     error InvalidPasswordCommit();
     error InvalidActionCalldata();
 
-    event AccountInitialized(address indexed account, bytes32 indexed primaryMerkleRoot, address indexed vault);
+    event AccountInitialized(address indexed account, bytes32 indexed primaryMerkleRoot);
     event AdminAdded(bytes32 indexed merkleRoot, bytes32 pubSeed);
     event AdminRemoved(bytes32 indexed merkleRoot);
     event MerkleRootRotated(bytes32 indexed oldRoot, bytes32 indexed newRoot, bytes32 newPubSeed);
@@ -62,8 +66,9 @@ contract QuantumVaultAccount is BaseAccount, IAccountExecute {
     uint256 internal constant TREE_DEPTH = 8;
     uint256 internal constant TREE_SIZE  = 1 << TREE_DEPTH; // 256 leaves
 
-    IEntryPoint  private immutable _entryPoint;
-    QuantumVault public  immutable vault;
+    IEntryPoint private immutable _entryPoint;
+    /// @notice Factory that deployed this account — used to gate initialize().
+    address     public  immutable factory;
 
     bytes32 public primaryMerkleRoot;
     bytes32 public passwordDomain; // keccak256(primaryMerkleRoot, primaryPubSeed) — fixed at init
@@ -91,10 +96,10 @@ contract QuantumVaultAccount is BaseAccount, IAccountExecute {
 
     bool private _initialized;
 
-    constructor(IEntryPoint entryPoint_, address vault_) {
-        if (vault_ == address(0)) revert ZeroAddress();
+    constructor(IEntryPoint entryPoint_, address factory_) {
+        if (factory_ == address(0)) revert ZeroAddress();
         _entryPoint = entryPoint_;
-        vault       = QuantumVault(payable(vault_));
+        factory     = factory_;
     }
 
     /// @notice One-time init called by the factory post-deploy.
@@ -110,7 +115,7 @@ contract QuantumVaultAccount is BaseAccount, IAccountExecute {
         if (primaryMerkleRoot_ == bytes32(0)) revert ZeroRoot();
         if (initialWalletAdmin_ == address(0)) revert ZeroAddress();
         // passwordCommit_ == bytes32(0) is valid — disables password check.
-        if (msg.sender != vault.factory()) revert Unauthorized();
+        if (msg.sender != factory) revert Unauthorized();
 
         _initialized = true;
 
@@ -121,7 +126,7 @@ contract QuantumVaultAccount is BaseAccount, IAccountExecute {
         _addAdmin(primaryMerkleRoot_, primaryPubSeed_);
         _addWalletAdmin(initialWalletAdmin_);
 
-        emit AccountInitialized(address(this), primaryMerkleRoot_, address(vault));
+        emit AccountInitialized(address(this), primaryMerkleRoot_);
     }
 
     function entryPoint() public view override returns (IEntryPoint) {
@@ -139,9 +144,11 @@ contract QuantumVaultAccount is BaseAccount, IAccountExecute {
         _;
     }
 
+    /// @dev Pay EntryPoint prefund directly from account balance.
     function _payPrefund(uint256 missingAccountFunds) internal override {
         if (missingAccountFunds > 0) {
-            vault.withdrawNative(payable(address(entryPoint())), missingAccountFunds);
+            (bool ok, ) = payable(address(entryPoint())).call{value: missingAccountFunds}("");
+            if (!ok) revert TransferFailed();
         }
     }
 
@@ -213,52 +220,51 @@ contract QuantumVaultAccount is BaseAccount, IAccountExecute {
         return result;
     }
 
-    // ── Vault operations ──────────────────────────────────────────────────────
+    // ── Asset operations ──────────────────────────────────────────────────────
 
+    /// @notice Withdraw native ETH/gas token to recipient.
     function executeNativeWithdrawal(address payable recipient, uint256 amount)
-        external onlyEntryPointOrSelf
+        external onlyEntryPointOrSelf nonReentrant
     {
-        vault.withdrawNative(recipient, amount);
+        if (address(this).balance < amount) revert InsufficientBalance();
+        (bool ok, ) = recipient.call{value: amount}("");
+        if (!ok) revert TransferFailed();
     }
 
+    /// @notice Withdraw ERC-20 token to recipient.
     function executeERC20Withdrawal(IERC20 token, address recipient, uint256 amount)
-        external onlyEntryPointOrSelf
+        external onlyEntryPointOrSelf nonReentrant
     {
-        vault.withdrawERC20(token, recipient, amount);
+        token.safeTransfer(recipient, amount);
     }
 
-    // ── External call forwarding (for Relay swap/bridge) ─────────────────────
-    // Pulls ETH from vault into account, then calls an external contract (e.g.
-    // Relay depository or erc20Router). Used for native-token swaps and bridges.
+    /// @notice Call an external contract (e.g. Relay depository) forwarding native value.
+    ///         Funds come directly from account balance — no vault roundtrip.
     function executeExternalCall(
         address to,
         uint256 nativeAmount,
         bytes calldata data
-    ) external onlyEntryPointOrSelf {
-        if (nativeAmount > 0) {
-            vault.withdrawNative(payable(address(this)), nativeAmount);
-        }
+    ) external onlyEntryPointOrSelf nonReentrant {
+        if (nativeAmount > 0 && address(this).balance < nativeAmount) revert InsufficientBalance();
         (bool ok, bytes memory ret) = to.call{value: nativeAmount}(data);
         if (!ok) assembly { revert(add(ret, 0x20), mload(ret)) }
     }
 
-    // Pulls ERC-20 from vault, approves spender, then calls target.
-    // Used for ERC-20 bridge/swap flows that need approve + deposit in one leaf.
+    /// @notice Approve + call external contract for ERC-20 swap/bridge flows.
+    ///         Clears residual allowance after the call.
     function executeERC20ExternalCall(
         address token,
         uint256 tokenAmount,
         address spender,
         address to,
         bytes calldata data
-    ) external onlyEntryPointOrSelf {
-        vault.withdrawERC20(IERC20(token), address(this), tokenAmount);
-        IERC20(token).approve(spender, tokenAmount);
+    ) external onlyEntryPointOrSelf nonReentrant {
+        // Use forceApprove to handle USDT-style tokens that revert on non-zero→non-zero approve
+        IERC20(token).forceApprove(spender, tokenAmount);
         (bool ok, bytes memory ret) = to.call(data);
         if (!ok) assembly { revert(add(ret, 0x20), mload(ret)) }
+        IERC20(token).forceApprove(spender, 0);
     }
-
-    // Allow account to receive ETH transiently (needed for executeExternalCall)
-    receive() external payable {}
 
     // ── directExecute (gas-separated flow) ───────────────────────────────────
     //
@@ -539,10 +545,6 @@ contract QuantumVaultAccount is BaseAccount, IAccountExecute {
         }
     }
 
-    receive() external payable {
-        if (msg.value > 0) {
-            (bool ok, ) = address(vault).call{value: msg.value}("");
-            if (!ok) revert VaultForwardFailed();
-        }
-    }
+    /// @dev Accept ETH/gas token deposits directly.
+    receive() external payable {}
 }

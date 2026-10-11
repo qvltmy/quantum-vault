@@ -1,12 +1,13 @@
 
 import React, { useState, useEffect, useRef } from 'react';
+import { QRCodeSVG } from 'qrcode.react';
 import { ethers } from 'ethers';
 import { 
   Copy, RefreshCw, ArrowDownToLine, ArrowRightLeft, Settings, 
   Plus, AlertTriangle, Shield, ShieldCheck, Trash2, KeyRound, LogOut, Lock, 
   Wallet, Coins, Users, Search, Info, CheckCircle2,
   X, ChevronDown, ChevronUp, Check, Clock, Lightbulb, Zap, Loader2, UserCheck, UserX,
-  PieChart, Activity, ArrowDownUp
+  PieChart, Activity, ArrowDownUp, Pencil
 } from 'lucide-react';
 import { VaultState, UserState, getChainTokens, TokenInfo, CHAINS } from '../types';
 import { useLanguage } from '../contexts/LanguageContext';
@@ -141,6 +142,9 @@ const Dashboard: React.FC<DashboardProps> = ({
   const [swapDestChain, setSwapDestChain] = useState<import('../services/relayService').RelayChain | null>(null);
   const [swapDestCurrencies, setSwapDestCurrencies] = useState<import('../services/relayService').RelayCurrency[]>([]);
   const [swapDestCurrency, setSwapDestCurrency] = useState<import('../services/relayService').RelayCurrency | null>(null);
+  const [swapDestIsCustom, setSwapDestIsCustom] = useState(false);
+  const [swapDestCustomAddr, setSwapDestCustomAddr] = useState('');
+  const [swapDestCurrencySearch, setSwapDestCurrencySearch] = useState('');
   const [swapQuote, setSwapQuote] = useState<import('../services/relayService').RelayQuote | null>(null);
   const [swapQuoteError, setSwapQuoteError] = useState<string | null>(null);
   const [swapQuoting, setSwapQuoting] = useState(false);
@@ -150,6 +154,8 @@ const Dashboard: React.FC<DashboardProps> = ({
   const swapChainPickerRef = useRef<HTMLDivElement>(null);
   const swapDestCurrencyPickerRef = useRef<HTMLDivElement>(null);
   const swapOriginPickerRef = useRef<HTMLDivElement>(null);
+  const [swapRecipient, setSwapRecipient] = useState('');
+  const [swapRecipientCustomMode, setSwapRecipientCustomMode] = useState(false);
   const [newPw, setNewPw] = useState("");
   const [newPwConfirm, setNewPwConfirm] = useState("");
 
@@ -167,6 +173,12 @@ const Dashboard: React.FC<DashboardProps> = ({
   const effectiveChainId = isDemo ? 4663n : user.chainId;
   const currentChain = CHAINS.find(c => BigInt(c.id) === effectiveChainId);
   const nativeTicker = currentChain ? currentChain.ticker : "ETH";
+
+  // ── Receive: selected chain for QR display ───────────────────────────────
+  const [receiveChainId, setReceiveChainId] = useState<number>(4663);
+  const [showQR, setShowQR] = useState(false);
+  const [receiveCopied, setReceiveCopied] = useState(false);
+  const [deployedChains, setDeployedChains] = useState<Record<number, boolean | null>>({});
   const chainLabel   = currentChain?.label ?? currentChain?.name ?? "Robinhood Chain";
   // Per-chain ERC-20 token list (index 0 is wrapped native — skip it for the quick-pick grid
   // since native is shown separately; slice from 1 to get ERC-20 choices)
@@ -208,24 +220,56 @@ const Dashboard: React.FC<DashboardProps> = ({
     return () => document.removeEventListener('mousedown', handle);
   }, []);
 
-  // ── Swap: load chains when tab opens ────────────────────────────────────
+  // ── Swap: preload chains on mount (not on tab open) ─────────────────────
   useEffect(() => {
-    if (activeTab !== 'swap' || swapDestChains.length > 0) return;
-    import('../services/relayService').then(({ getRelayChains, ROBINHOOD_CHAIN_ID }) => {
+    if (swapDestChains.length > 0) return;
+    import('../services/relayService').then(({ getRelayChains, getRelayCurrencies, ROBINHOOD_CHAIN_ID }) => {
       getRelayChains().then(all => {
-        const filtered = all.filter((c: import('../services/relayService').RelayChain) => c.id !== ROBINHOOD_CHAIN_ID);
+        const filtered = all.filter((c: import('../services/relayService').RelayChain) => !!c); // all chains including Robinhood
         setSwapDestChains(filtered);
         const base = filtered.find((c: import('../services/relayService').RelayChain) => c.id === 8453) ?? filtered[0];
-        setSwapDestChain(base ?? null);
+        if (!base) return;
+        setSwapDestChain(base);
+        // preload Base currencies in parallel
+        getRelayCurrencies(base.id).then(list => {
+          setSwapDestCurrencies(list);
+          const eth = list.find((c: import('../services/relayService').RelayCurrency) => c.address === '0x0000000000000000000000000000000000000000') ?? list[0];
+          setSwapDestCurrency(eth ?? null);
+        }).catch(() => {});
       }).catch(() => {});
     });
-  }, [activeTab, swapDestChains.length]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-  // ── Swap: load dest currencies when chain changes ───────────────────────
+  // ── Deployed check: start as soon as vaultAddress is known ──────────────
+  useEffect(() => {
+    if (!vaultState?.vaultAddress) return;
+    const addr = vaultState.vaultAddress;
+    CHAINS.forEach(c => {
+      if (deployedChains[c.id] !== undefined) return;
+      setDeployedChains(prev => ({ ...prev, [c.id]: null }));
+      const rpc = c.rpcUrls?.[1] ?? c.rpcUrls?.[0] ?? c.rpc; // prefer 2nd RPC (often more stable)
+      fetch(rpc, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'eth_getCode', params: [addr, 'latest'] }),
+        signal: AbortSignal.timeout(5000),
+      })
+        .then(r => r.json())
+        .then(data => {
+          const code: string = data?.result ?? '0x';
+          setDeployedChains(prev => ({ ...prev, [c.id]: code !== '0x' && code !== '0x0' && code.length > 4 }));
+        })
+        .catch(() => setDeployedChains(prev => ({ ...prev, [c.id]: false })));
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [vaultState?.vaultAddress]);
+
+  // ── Swap: reload currencies when user manually picks a different chain ───
   useEffect(() => {
     if (!swapDestChain) return;
-    setSwapDestCurrencies([]);
-    setSwapDestCurrency(null);
+    // skip if already loaded for this chain
+    if (swapDestCurrencies.length > 0) return;
     import('../services/relayService').then(({ getRelayCurrencies }) => {
       getRelayCurrencies(swapDestChain.id).then(list => {
         setSwapDestCurrencies(list);
@@ -233,12 +277,15 @@ const Dashboard: React.FC<DashboardProps> = ({
         setSwapDestCurrency(eth ?? null);
       }).catch(() => {});
     });
-  }, [swapDestChain]);
+  }, [swapDestChain, swapDestCurrencies.length]);
 
   // ── Swap: fetch quote (debounced) ────────────────────────────────────────
   useEffect(() => {
     if (activeTab !== 'swap') return;
-    if (!swapDestChain || !swapDestCurrency || !swapAmount || parseFloat(swapAmount) <= 0) {
+    const destAddr = swapDestIsCustom
+      ? (ethers.isAddress(swapDestCustomAddr) ? swapDestCustomAddr : null)
+      : swapDestCurrency?.address ?? null;
+    if (!swapDestChain || !destAddr || !swapAmount || parseFloat(swapAmount) <= 0) {
       setSwapQuote(null); setSwapQuoteError(null); return;
     }
     const decimals = swapOriginAddr
@@ -251,15 +298,15 @@ const Dashboard: React.FC<DashboardProps> = ({
     if (!vaultAddr) return;
 
     const timer = setTimeout(() => {
-      setSwapQuoting(true); setSwapQuoteError(null); setSwapQuote(null);
+      setSwapQuoting(true); setSwapQuoteError(null); // ← do NOT clear swapQuote here — keep stale quote visible while refreshing
       import('../services/relayService').then(({ getRelayQuote, ROBINHOOD_CHAIN_ID }) => {
         getRelayQuote({
           user: vaultAddr,
-          recipient: vaultAddr,
+          recipient: (swapRecipient && ethers.isAddress(swapRecipient)) ? swapRecipient : vaultAddr,
           originChainId: ROBINHOOD_CHAIN_ID,
           destinationChainId: swapDestChain.id,
           originCurrency: swapOriginAddr || '0x0000000000000000000000000000000000000000',
-          destinationCurrency: swapDestCurrency.address,
+          destinationCurrency: destAddr,
           amount: amountWei.toString(),
         }).then(q => { setSwapQuote(q); }).catch((e: any) => {
           setSwapQuoteError(e?.message ?? 'Failed to get quote');
@@ -267,7 +314,7 @@ const Dashboard: React.FC<DashboardProps> = ({
       });
     }, 600);
     return () => clearTimeout(timer);
-  }, [activeTab, swapDestChain, swapDestCurrency, swapAmount, swapOriginAddr, vaultState]);
+  }, [activeTab, swapDestChain, swapDestCurrency, swapDestIsCustom, swapDestCustomAddr, swapAmount, swapOriginAddr, swapRecipient, vaultState]);
 
 
   useEffect(() => {
@@ -612,25 +659,105 @@ const Dashboard: React.FC<DashboardProps> = ({
                  </div>
 
                  <div className="space-y-8">
-                    {/* Vault Deposit Address */}
-                    {vaultState.vaultAddress && (
-                      <div className="rounded-2xl border border-cyan-500/20 bg-cyan-950/20 p-5">
-                        <div className="flex items-center gap-2 mb-2">
-                          <div className="p-1.5 rounded-lg bg-cyan-500/10 text-cyan-300"><ArrowDownToLine size={14}/></div>
-                          <span className="text-xs font-bold text-cyan-200 uppercase tracking-widest">{t('deposit.vault_addr.title')}</span>
+                    {/* ── Receive address: chain picker + QR ────────────────── */}
+                    {vaultState.vaultAddress && (() => {
+                      const receiveChain = CHAINS.find(c => c.id === receiveChainId) ?? CHAINS[0];
+                      const isDeployed   = deployedChains[receiveChainId];
+                      const isChecking   = isDeployed === null;
+                      return (
+                        <div className="rounded-2xl border border-cyan-500/20 bg-cyan-950/20 p-5 space-y-4">
+                          <div className="flex items-center gap-2">
+                            <div className="p-1.5 rounded-lg bg-cyan-500/10 text-cyan-300"><ArrowDownToLine size={14}/></div>
+                            <span className="text-xs font-bold text-cyan-200 uppercase tracking-widest">{t('deposit.vault_addr.title')}</span>
+                          </div>
+
+                          {/* Chain selector with deployment status */}
+                          <div className="flex flex-wrap gap-2">
+                            {CHAINS.map(c => {
+                              const dep = deployedChains[c.id];
+                              const checking = dep === null;
+                              const deployed = dep === true;
+                              const notDeployed = dep === false;
+                              return (
+                                <button
+                                  key={c.id}
+                                  onClick={() => setReceiveChainId(c.id)}
+                                  className={`relative flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all border ${receiveChainId === c.id ? 'shadow-md' : 'bg-[#0b1424]/60 text-slate-400 border-cyan-100/[0.10] hover:text-white hover:bg-[#0c1d30]/80'}`}
+                                  style={receiveChainId === c.id ? { backgroundColor: c.color + '22', borderColor: c.color + '66', color: c.color } : {}}
+                                >
+                                  <span style={{ width: 8, height: 8, borderRadius: '50%', background: c.color, display: 'inline-block', flexShrink: 0 }}/>
+                                  {c.name}
+                                  {checking && <Loader2 size={9} className="animate-spin opacity-60"/>}
+                                  {deployed && <CheckCircle2 size={9} className="text-teal-400"/>}
+                                  {notDeployed && <AlertTriangle size={9} className="text-amber-400"/>}
+                                </button>
+                              );
+                            })}
+                          </div>
+
+                          {/* Not-deployed warning */}
+                          {isDeployed === false && (
+                            <div className="flex items-start gap-2 text-[11px] text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded-xl px-4 py-3">
+                              <AlertTriangle size={12} className="shrink-0 mt-0.5"/>
+                              <span>
+                                Vault not yet deployed on <strong className="text-white">{receiveChain.label}</strong>. Assets sent here may be unrecoverable until you create the vault on this chain from the Admin tab.
+                              </span>
+                            </div>
+                          )}
+
+                          {/* Address row + QR toggle */}
+                          <div className="space-y-3">
+                            <div className="flex items-center gap-2 bg-black/40 px-4 py-3 rounded-xl border border-cyan-500/10">
+                              <span className="flex-1 text-xs font-mono text-white break-all">{vaultState.vaultAddress}</span>
+                              {/* QR toggle */}
+                              <button
+                                onClick={() => setShowQR(v => !v)}
+                                title={showQR ? 'Hide QR' : 'Show QR'}
+                                className="shrink-0 p-1.5 rounded-lg bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-300 hover:text-white transition-all"
+                              >
+                                {/* simple grid icon for QR */}
+                                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                                  <rect x="2" y="2" width="8" height="8" rx="1"/><rect x="14" y="2" width="8" height="8" rx="1"/>
+                                  <rect x="2" y="14" width="8" height="8" rx="1"/>
+                                  <path d="M14 14h2v2h-2zM18 14h4M18 18v4M14 18h2M14 22h4"/>
+                                </svg>
+                              </button>
+                              {/* Copy with tick feedback */}
+                              <button
+                                onClick={() => {
+                                  navigator.clipboard.writeText(vaultState.vaultAddress || '');
+                                  setReceiveCopied(true);
+                                  setTimeout(() => setReceiveCopied(false), 3000);
+                                }}
+                                className="shrink-0 p-1.5 rounded-lg bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-300 hover:text-white transition-all"
+                              >
+                                {receiveCopied ? <Check size={13} className="text-teal-400"/> : <Copy size={13}/>}
+                              </button>
+                            </div>
+
+                            {/* QR code — only when toggled on */}
+                            {showQR && (
+                              <div className="flex flex-col md:flex-row items-center gap-5 pt-1 animate-fade-in">
+                                <div className="rounded-2xl bg-white p-3 shadow-lg shrink-0">
+                                  <QRCodeSVG
+                                    value={vaultState.vaultAddress}
+                                    size={160}
+                                    level="M"
+                                    bgColor="#ffffff"
+                                    fgColor="#0a0f1e"
+                                  />
+                                </div>
+                                <p className="text-[11px] text-cyan-200/70 leading-relaxed">
+                                  Send <strong style={{ color: receiveChain.color }}>{receiveChain.ticker}</strong> or any ERC-20 to your vault on <strong className="text-white">{receiveChain.label}</strong>.<br/>
+                                  Same address works on all 6 supported chains.<br/>
+                                  <span className="text-slate-600">⚠ Only send from supported chains — transfers from unsupported networks may be lost.</span>
+                                </p>
+                              </div>
+                            )}
+                          </div>
                         </div>
-                        <p className="text-[11px] text-cyan-200/70 mb-3 leading-relaxed">{t('deposit.vault_addr.desc')}</p>
-                        <div className="flex items-center gap-2 bg-black/40 px-4 py-3 rounded-xl border border-cyan-500/10">
-                          <span className="flex-1 text-xs font-mono text-white truncate">{vaultState.vaultAddress}</span>
-                          <button
-                            onClick={() => copyToClipboard(vaultState.vaultAddress || "")}
-                            className="shrink-0 p-1.5 rounded-lg bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-300 hover:text-white transition-all"
-                          >
-                            <Copy size={13}/>
-                          </button>
-                        </div>
-                      </div>
-                    )}
+                      );
+                    })()}
 
                     {/* Token Selection */}
                     <div>
@@ -973,63 +1100,46 @@ const Dashboard: React.FC<DashboardProps> = ({
 
               <div className="space-y-5">
                 {/* ── Origin ─────────────────────────────────────────────── */}
-                <div>
-                  <div className="flex items-center justify-between mb-3 px-1">
-                    <label className="text-xs font-bold text-slate-400 uppercase tracking-wider">From Vault</label>
-                    {(() => {
-                      const origin = swapOriginAddr
-                        ? vaultState?.vaultTokens.find(t => t.address.toLowerCase() === swapOriginAddr.toLowerCase())
-                        : null;
-                      const bal = swapOriginAddr
-                        ? (origin ? parseFloat(ethers.formatUnits(origin.balance, origin.decimals)).toFixed(4) : '0')
-                        : parseFloat(ethers.formatEther(vaultState?.nativeBalance ?? 0n)).toFixed(4);
-                      const sym = swapOriginAddr ? (origin?.symbol ?? '?') : nativeTicker;
-                      return (
-                        <button
-                          onClick={() => {
-                            const decimals = swapOriginAddr ? (origin?.decimals ?? 18) : 18;
-                            const max = swapOriginAddr
-                              ? (origin ? ethers.formatUnits(origin.balance, decimals) : '0')
-                              : ethers.formatEther(vaultState?.nativeBalance ?? 0n);
-                            setSwapAmount(parseFloat(max).toFixed(6).replace(/\.?0+$/, ''));
-                          }}
-                          className="text-[10px] font-bold text-violet-300 bg-violet-500/10 border border-violet-500/20 px-3 py-1.5 rounded-lg hover:bg-violet-500/20 transition-colors flex items-center gap-1.5"
-                        >
-                          <Coins size={10}/> Max: {bal} {sym}
-                        </button>
-                      );
-                    })()}
-                  </div>
-
-                  <div className="grid grid-cols-[1fr_auto] gap-3">
-                    {/* Amount input */}
-                    <div className="relative group">
-                      <input
-                        type="number"
-                        min="0"
-                        value={swapAmount}
-                        onChange={e => setSwapAmount(e.target.value)}
-                        placeholder="0.00"
-                        className="glass-input w-full h-16 md:h-20 pl-6 pr-4 rounded-2xl text-3xl md:text-4xl font-mono text-white placeholder-slate-800 transition-all shadow-inner bg-[#050914]/50 border-cyan-100/[0.16] focus:ring-2 focus:ring-violet-500/30"
-                      />
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6 md:gap-8 items-start">
+                  {/* Left: Asset Selection */}
+                  <div className="space-y-3">
+                    <div className="flex justify-between items-center h-7 px-1">
+                      <label className="text-xs font-bold text-slate-400 uppercase tracking-wider">From Vault</label>
+                      {(() => {
+                        const origin = swapOriginAddr
+                          ? vaultState?.vaultTokens.find(t => t.address.toLowerCase() === swapOriginAddr.toLowerCase())
+                          : null;
+                        const bal = swapOriginAddr
+                          ? (origin ? parseFloat(ethers.formatUnits(origin.balance, origin.decimals)).toFixed(4) : '0')
+                          : parseFloat(ethers.formatEther(vaultState?.nativeBalance ?? 0n)).toFixed(4);
+                        const sym = swapOriginAddr ? (origin?.symbol ?? '?') : nativeTicker;
+                        return (
+                          <span className="text-[10px] font-bold px-2 py-1 rounded-lg border text-violet-300 bg-violet-950/50 border-violet-500/20">
+                            Available: {bal} {sym}
+                          </span>
+                        );
+                      })()}
                     </div>
 
-                    {/* Origin token selector */}
-                    <div className="relative" ref={swapOriginPickerRef}>
+                    <div className="relative h-20" ref={swapOriginPickerRef}>
                       <button
+                        type="button"
                         onClick={() => setSwapOriginPickerOpen(v => !v)}
-                        className="glass-input quantum-control h-16 md:h-20 px-4 rounded-2xl flex flex-col items-center justify-center gap-1 bg-[#050914]/50 border-cyan-100/[0.16] hover:bg-[#0c1d30]/80 transition-colors min-w-[90px]"
+                        className="glass-input quantum-control w-full h-full px-6 rounded-2xl flex items-center justify-between transition-all hover:bg-[#0c1d30]/80 border-cyan-100/[0.16] active:scale-[0.99] group bg-[#050914]/50"
                       >
-                        <span className="text-sm font-bold text-white">
+                        <span className="text-lg font-bold text-white group-hover:text-violet-200 transition-colors">
                           {swapOriginAddr
                             ? (vaultState?.vaultTokens.find(t => t.address.toLowerCase() === swapOriginAddr.toLowerCase())?.symbol ?? '?')
                             : nativeTicker}
                         </span>
-                        <ChevronDown size={12} className="text-slate-400"/>
+                        <div className="text-slate-400 group-hover:text-white transition-colors">
+                          {swapOriginPickerOpen ? <ChevronUp size={20}/> : <ChevronDown size={20}/>}
+                        </div>
                       </button>
+
                       {swapOriginPickerOpen && (
-                        <div className="absolute top-full right-0 mt-2 w-52 bg-[#0b1424] border border-cyan-100/[0.16] rounded-2xl shadow-2xl z-50 animate-fade-in overflow-hidden">
-                          <div className="max-h-52 overflow-y-auto custom-scrollbar p-2 space-y-1">
+                        <div className="absolute top-full left-0 right-0 mt-2 bg-[#0b1424] border border-cyan-100/[0.16] rounded-2xl shadow-2xl overflow-hidden z-50 animate-fade-in origin-top">
+                          <div className="max-h-60 overflow-y-auto custom-scrollbar p-2 space-y-1">
                             {/* Native */}
                             <button
                               onClick={() => { setSwapOriginAddr(''); setSwapOriginPickerOpen(false); setSwapAmount(''); }}
@@ -1056,6 +1166,38 @@ const Dashboard: React.FC<DashboardProps> = ({
                           </div>
                         </div>
                       )}
+                    </div>
+                  </div>
+
+                  {/* Right: Amount */}
+                  <div className="space-y-3">
+                    <div className="flex justify-between items-center h-7 px-1">
+                      <label className="text-xs font-bold text-slate-400 uppercase tracking-wider">Amount</label>
+                    </div>
+                    <div className="relative group h-20">
+                      <input
+                        type="number"
+                        min="0"
+                        value={swapAmount}
+                        onChange={e => setSwapAmount(e.target.value)}
+                        placeholder="0.00"
+                        className="glass-input w-full h-full pl-6 pr-20 rounded-2xl text-3xl font-mono text-white placeholder-slate-800 transition-all shadow-inner bg-[#050914]/50 border-cyan-100/[0.16] focus:ring-2 focus:ring-violet-500/30"
+                      />
+                      <button
+                        onClick={() => {
+                          const origin = swapOriginAddr
+                            ? vaultState?.vaultTokens.find(t => t.address.toLowerCase() === swapOriginAddr.toLowerCase())
+                            : null;
+                          const decimals = origin?.decimals ?? 18;
+                          const max = swapOriginAddr
+                            ? (origin ? ethers.formatUnits(origin.balance, decimals) : '0')
+                            : ethers.formatEther(vaultState?.nativeBalance ?? 0n);
+                          setSwapAmount(parseFloat(max).toFixed(6).replace(/\.?0+$/, ''));
+                        }}
+                        className="absolute right-6 top-1/2 -translate-y-1/2 px-3 py-1.5 rounded-xl bg-violet-500/10 text-xs font-bold text-violet-300 hover:bg-violet-500/20 transition-colors uppercase tracking-wider border border-violet-500/20"
+                      >
+                        MAX
+                      </button>
                     </div>
                   </div>
                 </div>
@@ -1099,7 +1241,7 @@ const Dashboard: React.FC<DashboardProps> = ({
                             {swapDestChains.map(c => (
                               <button
                                 key={c.id}
-                                onClick={() => { setSwapDestChain(c); setSwapChainPickerOpen(false); }}
+                                onClick={() => { setSwapDestChain(c); setSwapDestCurrencies([]); setSwapDestCurrency(null); setSwapChainPickerOpen(false); }}
                                 className={`w-full flex items-center gap-3 p-3 rounded-xl text-sm transition-all ${c.id === swapDestChain?.id ? 'bg-violet-600 text-white' : 'text-slate-300 hover:bg-[#0c1d30]/80 hover:text-white'}`}
                               >
                                 {c.iconUrl && <img src={c.iconUrl} className="w-5 h-5 rounded-full shrink-0" alt=""/>}
@@ -1114,16 +1256,20 @@ const Dashboard: React.FC<DashboardProps> = ({
                     {/* Destination token */}
                     <div className="relative" ref={swapDestCurrencyPickerRef}>
                       <button
-                        onClick={() => setSwapDestCurrencyPickerOpen(v => !v)}
-                        disabled={swapDestCurrencies.length === 0}
-                        className="glass-input quantum-control w-full h-16 px-5 rounded-2xl flex items-center justify-between bg-[#050914]/50 border-cyan-100/[0.16] hover:bg-[#0c1d30]/80 transition-colors group disabled:opacity-50"
+                        onClick={() => { setSwapDestCurrencyPickerOpen(v => !v); setSwapDestCurrencySearch(''); }}
+                        className="glass-input quantum-control w-full h-16 px-5 rounded-2xl flex items-center justify-between bg-[#050914]/50 border-cyan-100/[0.16] hover:bg-[#0c1d30]/80 transition-colors group"
                       >
                         <div className="flex items-center gap-3">
-                          {swapDestCurrency?.metadata?.logoURI && <img src={swapDestCurrency.metadata.logoURI} className="w-5 h-5 rounded-full" alt=""/>}
+                          {!swapDestIsCustom && swapDestCurrency?.metadata?.logoURI && (
+                            <img src={swapDestCurrency.metadata.logoURI} className="w-5 h-5 rounded-full" alt=""/>
+                          )}
                           <div className="text-left">
                             <div className="text-[10px] text-slate-500 font-bold uppercase tracking-wider">Receive</div>
                             <div className="text-sm font-bold text-white">
-                              {swapDestCurrency ? swapDestCurrency.symbol : <span className="text-slate-500">Loading…</span>}
+                              {swapDestIsCustom
+                                ? (ethers.isAddress(swapDestCustomAddr) ? `${swapDestCustomAddr.slice(0,6)}…${swapDestCustomAddr.slice(-4)}` : <span className="text-slate-500">Custom…</span>)
+                                : swapDestCurrency ? swapDestCurrency.symbol : <span className="text-slate-500">Loading…</span>
+                              }
                             </div>
                           </div>
                         </div>
@@ -1131,23 +1277,146 @@ const Dashboard: React.FC<DashboardProps> = ({
                       </button>
                       {swapDestCurrencyPickerOpen && (
                         <div className="absolute top-full left-0 right-0 mt-2 bg-[#0b1424] border border-cyan-100/[0.16] rounded-2xl shadow-2xl z-50 animate-fade-in overflow-hidden">
+                          {/* Search */}
+                          <div className="p-2 border-b border-cyan-100/[0.08]">
+                            <input
+                              autoFocus
+                              value={swapDestCurrencySearch}
+                              onChange={e => setSwapDestCurrencySearch(e.target.value)}
+                              placeholder="Search token or paste address…"
+                              className="w-full bg-[#050914]/80 border border-cyan-100/[0.12] rounded-xl px-3 py-2 text-xs text-white placeholder-slate-600 outline-none focus:border-violet-500/40"
+                            />
+                          </div>
                           <div className="max-h-52 overflow-y-auto custom-scrollbar p-2 space-y-1">
-                            {swapDestCurrencies.map(c => (
+                            {/* Custom address entry */}
+                            {ethers.isAddress(swapDestCurrencySearch) && (
                               <button
-                                key={c.address}
-                                onClick={() => { setSwapDestCurrency(c); setSwapDestCurrencyPickerOpen(false); }}
-                                className={`w-full flex items-center gap-3 p-3 rounded-xl text-sm transition-all ${c.address === swapDestCurrency?.address ? 'bg-violet-600 text-white' : 'text-slate-300 hover:bg-[#0c1d30]/80 hover:text-white'}`}
+                                onClick={() => {
+                                  setSwapDestIsCustom(true);
+                                  setSwapDestCustomAddr(swapDestCurrencySearch);
+                                  setSwapDestCurrencyPickerOpen(false);
+                                  setSwapDestCurrency(null);
+                                }}
+                                className="w-full flex items-center gap-3 p-3 rounded-xl text-sm transition-all bg-violet-500/10 border border-violet-500/20 text-violet-200 hover:bg-violet-500/20"
                               >
-                                {c.metadata?.logoURI && <img src={c.metadata.logoURI} className="w-5 h-5 rounded-full shrink-0" alt=""/>}
-                                <span className="font-bold">{c.symbol}</span>
-                                <span className="text-xs opacity-60 truncate">{c.name}</span>
+                                <Search size={14} className="shrink-0"/>
+                                <span className="font-mono">{swapDestCurrencySearch.slice(0,10)}…</span>
+                                <span className="text-xs text-violet-400 ml-auto">Custom token</span>
                               </button>
-                            ))}
+                            )}
+                            {swapDestCurrencies
+                              .filter(c => c?.symbol && c?.name && c?.address)
+                              .filter(c => !swapDestCurrencySearch || c.symbol.toLowerCase().includes(swapDestCurrencySearch.toLowerCase()) || c.name.toLowerCase().includes(swapDestCurrencySearch.toLowerCase()) || c.address.toLowerCase().startsWith(swapDestCurrencySearch.toLowerCase()))
+                              .map(c => (
+                                <button
+                                  key={c.address}
+                                  onClick={() => { setSwapDestCurrency(c); setSwapDestIsCustom(false); setSwapDestCustomAddr(''); setSwapDestCurrencyPickerOpen(false); }}
+                                  className={`w-full flex items-center gap-3 p-3 rounded-xl text-sm transition-all ${!swapDestIsCustom && c.address === swapDestCurrency?.address ? 'bg-violet-600 text-white' : 'text-slate-300 hover:bg-[#0c1d30]/80 hover:text-white'}`}
+                                >
+                                  {c.metadata?.logoURI && <img src={c.metadata.logoURI} className="w-5 h-5 rounded-full shrink-0" alt=""/>}
+                                  <span className="font-bold">{c.symbol}</span>
+                                  <span className="text-xs opacity-60 truncate">{c.name}</span>
+                                </button>
+                              ))
+                            }
+                            {swapDestCurrencies.length === 0 && !ethers.isAddress(swapDestCurrencySearch) && (
+                              <div className="flex items-center justify-center py-6 gap-2 text-slate-500 text-xs">
+                                <Loader2 size={13} className="animate-spin"/> Loading tokens…
+                              </div>
+                            )}
                           </div>
                         </div>
                       )}
                     </div>
                   </div>
+
+                  {/* Custom token address input (when custom selected) */}
+                  {swapDestIsCustom && (
+                    <div className="mt-3">
+                      <div className="flex items-center gap-2">
+                        <input
+                          value={swapDestCustomAddr}
+                          onChange={e => setSwapDestCustomAddr(e.target.value)}
+                          placeholder="Token contract address 0x…"
+                          className={`glass-input flex-1 h-12 px-5 rounded-2xl text-xs font-mono text-white placeholder-slate-700 bg-[#050914]/50 transition-all ${swapDestCustomAddr && !ethers.isAddress(swapDestCustomAddr) ? 'border-red-500/50' : 'border-cyan-100/[0.16]'}`}
+                        />
+                        <button
+                          onClick={() => { setSwapDestIsCustom(false); setSwapDestCustomAddr(''); }}
+                          className="h-12 px-4 rounded-2xl bg-slate-800 border border-cyan-100/[0.16] text-slate-400 hover:text-white text-xs font-bold transition-colors"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                </div>
+
+                {/* ── Recipient address ───────────────────────────────────── */}
+                <div>
+                  <label className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-4 flex items-center justify-between pl-1">
+                    <span>Recipient</span>
+                    {!swapRecipientCustomMode ? (
+                      <button
+                        onClick={() => {
+                          setSwapRecipientCustomMode(true);
+                          setSwapRecipient(user.address || '');
+                        }}
+                        className="text-[10px] font-bold text-slate-400 bg-slate-800/60 border border-slate-700/60 px-3 py-1.5 rounded-lg hover:bg-slate-700/60 hover:text-white transition-colors flex items-center gap-1.5"
+                      >
+                        <Pencil size={9}/> Custom address
+                      </button>
+                    ) : (
+                      <button
+                        onClick={() => { setSwapRecipientCustomMode(false); setSwapRecipient(''); }}
+                        className="text-[10px] font-bold text-violet-300 bg-violet-500/10 border border-violet-500/20 px-3 py-1.5 rounded-lg hover:bg-violet-500/20 transition-colors flex items-center gap-1.5"
+                      >
+                        <Wallet size={9}/> Use vault address
+                      </button>
+                    )}
+                  </label>
+
+                  {!swapRecipientCustomMode ? (
+                    /* Read-only vault address display */
+                    <div className="glass-input w-full h-16 px-8 rounded-2xl flex items-center gap-3 bg-[#050914]/50 border-cyan-100/[0.16]">
+                      <Wallet size={14} className="text-violet-400 shrink-0"/>
+                      <span className="font-mono text-sm text-slate-300 truncate">
+                        {vaultState?.vaultAddress ?? '—'}
+                      </span>
+                      <span className="ml-auto text-[10px] text-violet-400 font-bold bg-violet-500/10 border border-violet-500/20 rounded-md px-2 py-0.5 shrink-0">Vault</span>
+                    </div>
+                  ) : (
+                    /* Custom address input — pre-filled with connected wallet */
+                    <div>
+                      <input
+                        autoFocus
+                        value={swapRecipient}
+                        onChange={e => setSwapRecipient(e.target.value)}
+                        placeholder={user.address || '0x…'}
+                        className={`glass-input w-full h-16 px-8 rounded-2xl text-sm font-mono text-white placeholder-slate-700 transition-all shadow-inner bg-[#050914]/50 focus:ring-2 focus:ring-violet-500/30 ${swapRecipient && !ethers.isAddress(swapRecipient) ? 'border-red-500/50 focus:ring-red-500/30' : 'border-cyan-100/[0.16]'}`}
+                      />
+                      {swapRecipient && !ethers.isAddress(swapRecipient) && (
+                        <div className="text-[10px] text-red-400 flex items-center gap-1 mt-2 font-bold animate-fade-in pl-2">
+                          <AlertTriangle size={10}/> Invalid address
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Cross-chain receive warning — only when dest chain not supported by vault factory */}
+                  {(() => {
+                    const VAULT_CHAIN_IDS = [4663, 1, 56, 8453, 42161, 137];
+                    const unsupported = swapDestChain && !VAULT_CHAIN_IDS.includes(swapDestChain.id);
+                    return unsupported && !swapRecipientCustomMode ? (
+                      <div className="mt-2 flex items-start gap-2 text-[11px] text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded-xl px-4 py-3">
+                        <AlertTriangle size={12} className="shrink-0 mt-0.5"/>
+                        <span>
+                          <strong>{swapDestChain!.displayName}</strong> is not a supported vault chain — your vault address may not exist there.
+                          Click <strong>Custom address</strong> above to specify a recipient wallet on {swapDestChain!.displayName}.
+                        </span>
+                      </div>
+                    ) : null;
+                  })()}
                 </div>
 
                 {/* ── Quote result ────────────────────────────────────────── */}
@@ -1200,7 +1469,16 @@ const Dashboard: React.FC<DashboardProps> = ({
                     try { amountWei = ethers.parseUnits(swapAmount, decimals); } catch { return; }
                     onSwapConfirm(swapQuote, swapOriginAddr || '0x0000000000000000000000000000000000000000', amountWei);
                   }}
-                  disabled={loading || !swapQuote || swapQuoting || !swapAmount || parseFloat(swapAmount) <= 0}
+                  disabled={(() => {
+                    const VAULT_CHAIN_IDS = [4663, 1, 56, 8453, 42161, 137];
+                    const destUnsupported = swapDestChain && !VAULT_CHAIN_IDS.includes(swapDestChain.id);
+                    return (
+                      loading || !swapQuote || swapQuoting ||
+                      !swapAmount || parseFloat(swapAmount) <= 0 ||
+                      (swapRecipientCustomMode && (!swapRecipient || !ethers.isAddress(swapRecipient))) ||
+                      (!!destUnsupported && !swapRecipientCustomMode)
+                    );
+                  })()}
                   className="w-full h-14 md:h-16 rounded-2xl bg-gradient-to-r from-violet-600 to-purple-600 hover:from-violet-500 hover:to-purple-500 text-white font-bold transition-all shadow-xl shadow-violet-900/30 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-3 text-base uppercase tracking-widest active:scale-[0.98]"
                 >
                   {loading ? <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin"/> : <ArrowDownUp size={20}/>}

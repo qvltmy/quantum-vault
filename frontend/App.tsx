@@ -23,6 +23,7 @@ import { DepositConfirmModal, WithdrawConfirmModal } from './components/ActionMo
 import SwapModal from './components/SwapModal';
 import { buildNativeActionCalldata, buildERC20ActionCalldata, pollRelayStatus } from './services/relayService';
 import type { RelayQuote } from './services/relayService';
+import { fetchChainTokens } from './services/blockscoutService';
 
 // Unified helper function to get the correct wallet provider object
 const getProviderObject = (type: string | null): any => {
@@ -66,14 +67,8 @@ const getProviderObject = (type: string | null): any => {
 // Stored at module level so getProviderObject() can return it after connect.
 let _wcProvider: any = null;
 
-const VAULT_ABI = [
-  "function authorizedAccount() view returns (address)",
-  "function withdrawNative(address payable recipient, uint256 amount) external",
-  "function withdrawERC20(address token, address recipient, uint256 amount) external"
-];
-
 const ACCOUNT_ABI = [
-  "function vault() view returns (address)",
+  "function factory() view returns (address)",
   "function entryPoint() view returns (address)",
   "function primaryMerkleRoot() view returns (bytes32)",
   "function passwordDomain() view returns (bytes32)",
@@ -104,16 +99,14 @@ const ACCOUNT_ABI = [
 ];
 
 const FACTORY_ABI = [
-  "function createAccount(bytes32 merkleRoot, bytes32 pubSeed, bytes32 passwordCommit) external payable returns (address account, address vault_, uint32 vaultIndex)",
-  "function getAddress(address creator, uint32 vaultIndex) public view returns (address)",
-  "function nextVaultIndex(address user) view returns (uint32)",
+  "function createAccount(bytes32 merkleRoot, bytes32 pubSeed, bytes32 passwordCommit) external payable returns (address account, uint32 accountIndex)",
+  "function getAddress(address creator, uint32 accountIndex) public view returns (address)",
+  "function nextAccountIndex(address user) view returns (uint32)",
   "function isAccount(address) view returns (bool)",
-  "function accountToVault(address) view returns (address)",
-  "function vaultToAccount(address) view returns (address)",
   "function getUserAccounts(address user) external view returns (address[])",
   "function getUserAccountCount(address user) external view returns (uint256)",
   "function getCreateFee() view returns (uint256)",
-  "event AccountCreated(address indexed account, address indexed vault, bytes32 indexed merkleRoot)"
+  "event AccountCreated(address indexed account, bytes32 indexed merkleRoot)"
 ];
 
 const ERC20_ABI = [
@@ -132,6 +125,34 @@ const STORAGE_CUSTOM_TOKENS = 'quantum_custom_tokens';
 const STORAGE_VAULTS_KEY    = 'quantum_vault_list';   // JSON array of account addresses
 const STORAGE_KEYGEN_PREFIX = 'quantum_keygen_';      // per-vault WOTS+ generation counter
 const STORAGE_DEMO_KEY      = 'quantum_demo_mode';    // persists demo mode across refresh
+const STORAGE_LEAF_HW_KEY   = 'quantum_leaf_hw';      // per-root high-water leaf index (cross-chain guard)
+
+// ── WOTS+ cross-chain leaf guard ──────────────────────────────────────────────
+// WOTS+ keys are one-time: signing two different messages with the same leaf
+// exposes enough hash-chain nodes to forge a third signature. The on-chain
+// directNonce only prevents replay on the same chain — the same leaf is unspent
+// on a fresh chain. This high-water mark persists across sessions and chains,
+// ensuring each leaf is used at most once globally.
+const getLeafHighWater = (merkleRoot: string): number => {
+  try {
+    const map = JSON.parse(localStorage.getItem(STORAGE_LEAF_HW_KEY) ?? '{}');
+    return typeof map[merkleRoot] === 'number' ? map[merkleRoot] : -1;
+  } catch { return -1; }
+};
+const recordLeafUsed = (merkleRoot: string, leafIndex: number): void => {
+  try {
+    const map = JSON.parse(localStorage.getItem(STORAGE_LEAF_HW_KEY) ?? '{}');
+    if (leafIndex > (map[merkleRoot] ?? -1)) {
+      map[merkleRoot] = leafIndex;
+      localStorage.setItem(STORAGE_LEAF_HW_KEY, JSON.stringify(map));
+    }
+  } catch {}
+};
+// Returns the next safe leaf index: max(onChainNonce, highWater+1)
+const safeNextLeafIndex = (merkleRoot: string, onChainNonce: number): number => {
+  const hw = getLeafHighWater(merkleRoot);
+  return Math.max(onChainNonce, hw + 1);
+};
 
 // ── Demo vault (view-only, no wallet required) ────────────────────────────────
 const DEMO_VAULT_ADDR   = '0xC7c0eE115e37BD1626590196776F61D00e71772b';
@@ -161,49 +182,27 @@ function App() {
   const isRestoringRef = React.useRef(true); // true during initial auto-connect, suppresses spurious accountsChanged disconnect
   const isGasSwitchingRef = React.useRef(false); // true while GasSeparationModal is open — suppress disconnect on wallet switch
   const [accountAddress, setAccountAddress] = useState<string | null>(localStorage.getItem(STORAGE_VAULT_KEY) || null);
-  const [vaultAddress, setVaultAddress] = useState<string | null>(() => {
-    // Restore demo vault address on refresh
-    if (localStorage.getItem(STORAGE_DEMO_KEY) === '1') return DEMO_VAULT_ADDR;
-    return null;
-  });
+  // In the no-vault architecture, vaultAddress === accountAddress (same contract holds assets).
+  const vaultAddress = accountAddress;
+  const setVaultAddress = setAccountAddress;
   const [vaultState, setVaultState] = useState<VaultState | null>(null);
   
   // Multi-vault: list of all account addresses for connected wallet + chain-fetched list
   const [myVaults, setMyVaults] = useState<{ account: string; vault: string; label?: string }[]>(() => {
-    try { return JSON.parse(localStorage.getItem(STORAGE_VAULTS_KEY) || '[]'); } catch { return []; }
+    try {
+      const raw = JSON.parse(localStorage.getItem(STORAGE_VAULTS_KEY) || '[]');
+      // Filter out stale V2 entries where vault/account might be null/undefined
+      return Array.isArray(raw) ? raw.filter((v: any) => v?.account && v?.vault) : [];
+    } catch { return []; }
   });
   const [isFetchingVaults, setIsFetchingVaults] = useState(false);
   const [isDemoMode, setIsDemoMode] = useState(() => localStorage.getItem(STORAGE_DEMO_KEY) === '1');
   
-  // Load vault address from account — re-runs when wallet connects or chain changes.
-  // user.chainId MUST be in deps; without it this is a stale closure that runs
-  // once at mount when chainId = 0n and never again when the wallet connects.
-  useEffect(() => {
-    const loadVaultAddress = async () => {
-      if (!accountAddress) return;
-      // Skip in demo mode — vault address already set from known constant
-      if (isDemoMode) return;
-      // Don't query until wallet is connected (chainId = 0n means not yet connected)
-      if (!user.isConnected || user.chainId === 0n) return;
-      try {
-        const eth = getProviderObject(localStorage.getItem(STORAGE_WALLET_TYPE));
-        if (!eth) return;
-        const provider = new ethers.BrowserProvider(eth);
-        const factory = new ethers.Contract(getFactoryAddress(user.chainId), [
-          "function accountToVault(address) view returns (address)"
-        ], provider);
-        const vault = await factory.accountToVault(accountAddress);
-        if (vault && vault !== ethers.ZeroAddress) {
-          setVaultAddress(vault);
-        }
-      } catch (err) {
-        console.error('Failed to load vault address:', err);
-      }
-    };
-    loadVaultAddress();
-  }, [accountAddress, user.chainId, user.isConnected]);
+  // No-op effect: vaultAddress === accountAddress, no separate vault lookup needed.
+  // (kept as placeholder so dependency arrays referencing accountAddress still work)
+  useEffect(() => {}, [accountAddress, user.chainId, user.isConnected]);
   
-  // Fetch all vaults created by connected wallet from chain.
+  // Fetch all accounts created by connected wallet from chain.
   // chainIdOverride must be passed explicitly — do NOT rely on user.chainId closure,
   // which is stale (0n) when called right after setUser() or from a pinned useCallback.
   const fetchUserVaults = async (userAddr: string, chainIdOverride?: bigint) => {
@@ -218,16 +217,8 @@ function App() {
       const factory = new ethers.Contract(getFactoryAddress(effectiveChainId), FACTORY_ABI, provider);
       const accounts: string[] = await factory.getUserAccounts(userAddr);
       if (!accounts || accounts.length === 0) { return; }
-      // Promise.allSettled: one failing accountToVault must not discard the rest
-      const settled = await Promise.allSettled(
-        accounts.map(async (acc: string) => {
-          const vault: string = await factory.accountToVault(acc);
-          return { account: acc, vault };
-        })
-      );
-      const pairs = settled
-        .filter((r): r is PromiseFulfilledResult<{ account: string; vault: string }> => r.status === 'fulfilled')
-        .map(r => r.value);
+      // Account IS the vault in V3 — map directly without extra RPC call
+      const pairs = accounts.map((acc: string) => ({ account: acc, vault: acc }));
       if (pairs.length > 0) {
         setMyVaults(pairs);
         localStorage.setItem(STORAGE_VAULTS_KEY, JSON.stringify(pairs));
@@ -274,9 +265,11 @@ function App() {
   
   const [showWithdrawModal, setShowWithdrawModal] = useState(false);
   const [pendingWithdraw, setPendingWithdraw] = useState<{amount: string, to: string, token: string, symbol: string} | null>(null);
+  const pendingWithdrawRef = React.useRef<{amount: string, to: string, token: string, symbol: string} | null>(null);
 
   const [showSwapModal, setShowSwapModal] = useState(false);
   const [pendingSwapQuote, setPendingSwapQuote] = useState<{ quote: RelayQuote; originCurrency: string; amount: bigint } | null>(null);
+  const pendingSwapQuoteRef = React.useRef<{ quote: RelayQuote; originCurrency: string; amount: bigint } | null>(null);
 
   // New Process State
   const [processState, setProcessState] = useState<{
@@ -652,9 +645,16 @@ function App() {
       const network = await provider.getNetwork();
       const bal = await provider.getBalance(user.address!);
       setUser(u => ({ ...u, nativeBalance: bal, chainId: network.chainId }));
-      setVaultState(null);
-      setVaultAddress(null);
-      localStorage.removeItem(STORAGE_VAULT_KEY);
+      // If a vault is already loaded, keep the user in the dashboard and refresh.
+      // Only clear state when no vault is active (e.g. first-time setup).
+      const storedVault = localStorage.getItem(STORAGE_VAULT_KEY);
+      if (!storedVault) {
+        setVaultState(null);
+        setVaultAddress(null);
+      } else {
+        // Trigger a vault refresh on the new chain
+        setTimeout(() => refreshVault(false), 500);
+      }
     } catch {}
   };
 
@@ -783,17 +783,13 @@ function App() {
 
   // ── Demo vault loader ────────────────────────────────────────────────────────
   const handleLoadDemoVault = async () => {
-    // Use known addresses directly — vaultToAccount reverts on Robinhood chain
+    // V3: account IS the vault — only one address needed
     setAccountAddress(DEMO_ACCOUNT_ADDR);
-    setVaultAddress(DEMO_VAULT_ADDR);
     setIsDemoMode(true);
     localStorage.setItem(STORAGE_DEMO_KEY, '1');
-    // Also store account so loadVaultAddress effect doesn't clobber it
     localStorage.setItem(STORAGE_VAULT_KEY, DEMO_ACCOUNT_ADDR);
-    // Set a placeholder vaultState immediately so the dashboard renders without
-    // waiting for cold RPC connections. refreshVault will overwrite with real data.
     setVaultState({
-      vaultAddress: DEMO_VAULT_ADDR,
+      vaultAddress: DEMO_ACCOUNT_ADDR,
       accountAddress: DEMO_ACCOUNT_ADDR,
       nativeBalance: 0n,
       chainId: DEMO_CHAIN_ID,
@@ -903,10 +899,25 @@ function App() {
         });
         const tokenInfos: TokenInfo[] = (await Promise.all(tokenInfoPromises)).filter(Boolean) as TokenInfo[];
 
-        setVaultState({
-          vaultAddress,
-          accountAddress: accountAddress!,
-          nativeBalance: bal,
+      // ── Blockscout: discover extra tokens not in the static list ────────
+      fetchChainTokens(4663, vaultAddress).then(extra => {
+        if (!extra.length) return;
+        setVaultState(prev => {
+          if (!prev) return prev;
+          const existing = new Set(prev.vaultTokens.map(t => t.address.toLowerCase()));
+          const newTokens: TokenInfo[] = extra
+            .filter(e => e?.address && e?.symbol)
+            .filter(e => !existing.has(e.address.toLowerCase()))
+            .map(e => ({ address: e.address, symbol: e.symbol, decimals: e.decimals, balance: BigInt(e.balance) }));
+          if (!newTokens.length) return prev;
+          return { ...prev, vaultTokens: [...prev.vaultTokens, ...newTokens] };
+        });
+      }).catch(() => {});
+
+      setVaultState({
+        vaultAddress,
+        accountAddress: accountAddress!,
+        nativeBalance: bal,
           chainId,
           primaryMerkleRoot,
           isPaused: false,
@@ -978,6 +989,22 @@ function App() {
 
       const tokenInfos: TokenInfo[] = (await Promise.all(tokenInfoPromises)).filter(Boolean) as TokenInfo[];
 
+      // ── Blockscout: discover extra tokens not in the static list ────────
+      const chainIdNum = Number(chainId);
+      fetchChainTokens(chainIdNum, vaultAddress).then(extra => {
+        if (!extra.length) return;
+        setVaultState(prev => {
+          if (!prev) return prev;
+          const existing = new Set(prev.vaultTokens.map(t => t.address.toLowerCase()));
+          const newTokens: TokenInfo[] = extra
+            .filter(e => e?.address && e?.symbol)
+            .filter(e => !existing.has(e.address.toLowerCase()))
+            .map(e => ({ address: e.address, symbol: e.symbol, decimals: e.decimals, balance: BigInt(e.balance) }));
+          if (!newTokens.length) return prev;
+          return { ...prev, vaultTokens: [...prev.vaultTokens, ...newTokens] };
+        });
+      }).catch(() => {});
+
       setVaultState({
         vaultAddress,
         accountAddress: accountAddress,
@@ -1011,19 +1038,10 @@ function App() {
     }
   }, [vaultAddress, accountAddress, isDemoMode, user.isConnected, user.address, getEthereumObject, t]);
 
-  const checkIsAuthorizer = useCallback(async (address: string): Promise<boolean> => {
-    if (!vaultAddress || !address) return false;
-    try {
-      const eth = getEthereumObject();
-      if (!eth) return false;
-      const provider = new ethers.BrowserProvider(eth);
-      const contract = new ethers.Contract(vaultAddress, VAULT_ABI, provider);
-      const authorized = await contract.authorizedAccount();
-      // In private vault, only the authorized account can withdraw
-      return authorized.toLowerCase() === address.toLowerCase();
-    } catch (e) {
-      return false;
-    }
+  const checkIsAuthorizer = useCallback(async (_address: string): Promise<boolean> => {
+    // V3: account IS the vault; wallet admin check is done on-chain via WOTS+.
+    // No separate authorizedAccount() needed — always return true for wallet admins.
+    return true;
   }, [vaultAddress, getEthereumObject]);
 
   useEffect(() => {
@@ -1105,37 +1123,23 @@ function App() {
       const factory = new ethers.Contract(getFactoryAddress(user.chainId), FACTORY_ABI, provider);
 
       let resolvedAccount: string | null = null;
-      let resolvedVault: string | null = null;
 
-      // Primary: treat input as vault address → reverse-lookup account
-      const accountFromVault: string = await factory.vaultToAccount(addr);
-      if (accountFromVault && accountFromVault !== ethers.ZeroAddress) {
-        resolvedAccount = accountFromVault;
-        resolvedVault   = addr;
-      } else {
-        // Fallback: treat input as account address
-        const isAcc: boolean = await factory.isAccount(addr);
-        if (isAcc) {
-          resolvedAccount = addr;
-          resolvedVault   = await factory.accountToVault(addr);
-        }
+      // V3: address IS the account (no vault/account split). Just verify it's registered.
+      const isAcc: boolean = await factory.isAccount(addr);
+      if (isAcc) {
+        resolvedAccount = addr;
       }
 
-      if (!resolvedAccount || !resolvedVault) {
-        showToast('Vault not found. Please check the address and try again.', 'error');
+      if (!resolvedAccount) {
+        showToast('Account not found. Please check the address and try again.', 'error');
         return;
       }
 
-      // ── Permission gate ──────────────────────────────────────────────────────
-      // Vault is password-gated — no on-chain permission check needed at load time.
-      // Operations require valid WOTS+ signature + password proof; wrong password produces InvalidPasswordProof.
-
       setAccountAddress(resolvedAccount);
-      setVaultAddress(resolvedVault);
       setIsDemoMode(false);
       localStorage.removeItem(STORAGE_DEMO_KEY);
       localStorage.setItem(STORAGE_VAULT_KEY, resolvedAccount);
-      addToHistory(resolvedVault); // store vault address in history (what users know)
+      addToHistory(resolvedAccount);
       handleNavigate('dashboard');
     } catch (err) {
       console.error('Failed to load vault:', err);
@@ -1204,12 +1208,12 @@ function App() {
             if (parsed?.name === "AccountCreated") { newAddr = parsed.args[0]; break; }
           } catch {}
         }
-        // Fallback: manual topic decode
+        // Fallback: manual topic decode — V3 event: AccountCreated(address,bytes32)
         if (!newAddr) {
-          const topicHash = ethers.id("AccountCreated(address,address,bytes32)");
+          const topicHash = ethers.id("AccountCreated(address,bytes32)");
           for (const log of receipt.logs) {
             if (log.topics[0] === topicHash) {
-              // topics[1] = account (indexed), topics[2] = vault (indexed)
+              // topics[1] = account (indexed)
               newAddr = ethers.getAddress('0x' + log.topics[1].slice(26));
               break;
             }
@@ -1232,17 +1236,6 @@ function App() {
         localStorage.removeItem(STORAGE_DEMO_KEY);
         localStorage.setItem(STORAGE_VAULT_KEY, newAddr);
         addToHistory(newAddr);
-        
-        // Query vault address with retry (node may need a moment to sync)
-        let vaultAddr: string | null = null;
-        for (let attempt = 0; attempt < 3; attempt++) {
-          try {
-            const v = await factory.accountToVault(newAddr);
-            if (v && v !== ethers.ZeroAddress) { vaultAddr = v; break; }
-          } catch {}
-          if (attempt < 2) await new Promise(r => setTimeout(r, 1000));
-        }
-        if (vaultAddr) setVaultAddress(vaultAddr);
         
         handleNavigate('dashboard');
         setProcessState(prev => ({ ...prev, step: 'success', successMsg: t('process.success.create') }));
@@ -1279,32 +1272,13 @@ function App() {
       if (accAddr === accountAddress) handleNavigate('dashboard');
       return;
     }
-    try {
-      const eth = getProviderObject(localStorage.getItem(STORAGE_WALLET_TYPE));
-      if (!eth) return;
-      const provider = new ethers.BrowserProvider(eth);
-      // Always resolve chainId from provider — user.chainId closure may be stale (0n)
-      const effectiveChainId = (await provider.getNetwork()).chainId;
-      const factory = new ethers.Contract(getFactoryAddress(effectiveChainId), [
-        "function accountToVault(address) view returns (address)"
-      ], provider);
-      const vault = await factory.accountToVault(accAddr);
-      if (!vault || vault === ethers.ZeroAddress) {
-        showToast('Vault not found for this account', 'error');
-        return;
-      }
-      setAccountAddress(accAddr);
-      setVaultAddress(vault);
-      setVaultState(null);
-      setIsDemoMode(false);
-      localStorage.removeItem(STORAGE_DEMO_KEY);
-      localStorage.setItem(STORAGE_VAULT_KEY, accAddr);
-      handleNavigate('dashboard');
-      showToast('Switched to vault ' + accAddr.slice(0, 8) + '…', 'success');
-    } catch (err) {
-      console.error('switchToVault error:', err);
-      showToast('Failed to switch vault', 'error');
-    }
+    setAccountAddress(accAddr);
+    setVaultState(null);
+    setIsDemoMode(false);
+    localStorage.removeItem(STORAGE_DEMO_KEY);
+    localStorage.setItem(STORAGE_VAULT_KEY, accAddr);
+    handleNavigate('dashboard');
+    showToast('Switched to account ' + accAddr.slice(0, 8) + '…', 'success');
   };
 
   const handleInitiateDeposit = (amount: string, token: string, symbol: string, isCustom: boolean) => {
@@ -1406,7 +1380,7 @@ function App() {
       }
 
       const onChainNonce: number = await accountContract.directNonce(signerRoot).then((n: bigint) => Number(n));
-      const leafIndex = onChainNonce;
+      const leafIndex = safeNextLeafIndex(signerRoot, onChainNonce);
       const TREE_SIZE = 256;
       const ROTATE_THRESHOLD = Math.floor(TREE_SIZE * 0.05); // 5% = 12 leaves remaining
 
@@ -1527,6 +1501,7 @@ function App() {
       });
       setProcessState(prev => ({ ...prev, step: 'confirming' }));
       await tx.wait(1);
+      recordLeafUsed(signerRoot, leafIndex);
 
       // 9. If we rotated, advance local generation counter
       if (nextGen > currentGen) {
@@ -1572,6 +1547,7 @@ function App() {
   };
 
   const handleInitiateWithdraw = (amount: string, to: string, token: string, symbol: string) => {
+    pendingWithdrawRef.current = { amount, to, token, symbol };
     setPendingWithdraw({ amount, to, token, symbol });
     setShowWithdrawModal(true);
   };
@@ -1586,8 +1562,9 @@ function App() {
   };
 
   const executeWithdraw = async (pw: string) => {
-    if (!pendingWithdraw || !accountAddress || !vaultAddress || !user.address) return;
-    const { amount, to, token } = pendingWithdraw;
+    const pending = pendingWithdrawRef.current;
+    if (!pending || !accountAddress || !vaultAddress || !user.address) return;
+    const { amount, to, token } = pending;
     const toAddr = to || user.address;
 
     if (!toAddr || !ethers.isAddress(toAddr)) {
@@ -1614,6 +1591,7 @@ function App() {
   // ── Relay Swap/Bridge ─────────────────────────────────────────────────────
   const handleSwapConfirm = (quote: RelayQuote, originCurrency: string, amount: bigint) => {
     setShowSwapModal(false);
+    pendingSwapQuoteRef.current = { quote, originCurrency, amount };
     setPendingSwapQuote({ quote, originCurrency, amount });
     setShowPwModal({
       isOpen: true,
@@ -1623,8 +1601,9 @@ function App() {
   };
 
   const executeSwap = async (pw: string) => {
-    if (!pendingSwapQuote || !accountAddress || !vaultAddress || !user.address) return;
-    const { quote, originCurrency, amount } = pendingSwapQuote;
+    const pending = pendingSwapQuoteRef.current;
+    if (!pending || !accountAddress || !vaultAddress || !user.address) return;
+    const { quote, originCurrency, amount } = pending;
     const ETH_ADDR = '0x0000000000000000000000000000000000000000';
     const isNative = originCurrency === ETH_ADDR;
     const actionCalldata = isNative
@@ -1648,6 +1627,7 @@ function App() {
     }).catch(() => {});
 
     setPendingSwapQuote(null);
+    pendingSwapQuoteRef.current = null;
   };
 
   const handleRotateEcdsaSigner = async (newPw: string, currentPw: string) => {
@@ -1702,7 +1682,7 @@ function App() {
         accountContract.passwordDomain()
       ]);
       const onChainNonce2: number = await accountContract.directNonce(signerRoot).then((n: bigint) => Number(n));
-      const leafIndex: number = onChainNonce2;
+      const leafIndex: number = safeNextLeafIndex(signerRoot, onChainNonce2);
 
       // New passwordCommit uses newPasswordPreimage + immutable passwordDomain
       const newCommit = ethers.keccak256(
@@ -1782,6 +1762,7 @@ function App() {
       });
       setProcessState(prev => ({ ...prev, step: 'confirming' }));
       await tx.wait(1);
+      recordLeafUsed(signerRoot, leafIndex);
 
       // Password changed → reset generation counter to 0 for new password
       setKeyGeneration(accountAddress, 0);

@@ -6,13 +6,13 @@ import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
-import {QuantumVault} from "./QuantumVault.sol";
 import {QuantumVaultAccount} from "./QuantumVaultAccount.sol";
 
-/// @title QuantumVaultAccountFactory V2
-/// @notice Deploys a (QuantumVault + QuantumVaultAccount) pair per user via CREATE2.
+/// @title QuantumVaultAccountFactory V3
+/// @notice Deploys a single QuantumVaultAccount per user slot via CREATE2.
+///         Assets live directly in the account — no separate vault contract.
 ///
-/// @dev Address determinism: salt = keccak256(creator, vaultIndex) — no password params.
+/// @dev Address determinism: salt = keccak256(creator, accountIndex) — no password params.
 ///      Constructor takes only IEntryPoint so bytecode is identical on every chain.
 ///      Deploy via Nick's factory (0x4e59b44847b379578588920cA78FbF26c0B4956C) with
 ///      the same salt to get the same factory address everywhere.
@@ -35,14 +35,13 @@ contract QuantumVaultAccountFactory is Ownable {
 
     event AccountCreated(
         address indexed account,
-        address indexed vault,
         bytes32 indexed merkleRoot
     );
     event ChainFeeSet(uint256 indexed chainId, uint256 fee);
     event ChainFeeRemoved(uint256 indexed chainId);
     event DefaultFeeUpdated(uint256 fee);
 
-    IEntryPoint public immutable entryPoint;
+    IEntryPoint public entryPoint;
 
     /// @notice Fallback fee for chains without a specific entry. 0.001 ether default.
     uint256 public defaultFee = 0.001 ether;
@@ -51,10 +50,8 @@ contract QuantumVaultAccountFactory is Ownable {
     mapping(uint256 => uint256) public chainFee;
 
     mapping(address => bool)      public isAccount;
-    mapping(address => address)   public accountToVault;
-    mapping(address => address)   public vaultToAccount;
     mapping(address => address[]) private _userAccounts;
-    mapping(address => uint32)    public nextVaultIndex;
+    mapping(address => uint32)    public nextAccountIndex;
 
     constructor(IEntryPoint entryPoint_, address initialOwner_) Ownable(initialOwner_) {
         entryPoint = entryPoint_;
@@ -70,47 +67,40 @@ contract QuantumVaultAccountFactory is Ownable {
 
     // ── Core ──────────────────────────────────────────────────────────────────
 
-    /// @notice Deploy a vault pair. If already deployed at this index, refunds fee and returns existing pair.
+    /// @notice Deploy a QuantumVaultAccount. If already deployed at this index, refunds fee and returns it.
     function createAccount(
         bytes32 merkleRoot,
         bytes32 pubSeed,
         bytes32 passwordCommit
-    ) external payable returns (QuantumVaultAccount account, QuantumVault vault_, uint32 vaultIndex) {
+    ) external payable returns (QuantumVaultAccount account, uint32 accountIndex) {
         if (msg.value < getCreateFee()) revert InsufficientFee();
 
-        vaultIndex               = nextVaultIndex[msg.sender];
-        bytes32 salt             = keccak256(abi.encode(msg.sender, vaultIndex));
-        address predictedAccount = getAddress(msg.sender, vaultIndex);
+        accountIndex             = nextAccountIndex[msg.sender];
+        bytes32 salt             = keccak256(abi.encode(msg.sender, accountIndex));
+        address predictedAccount = getAddress(msg.sender, accountIndex);
 
         if (predictedAccount.code.length == 0) {
-            vault_ = new QuantumVault{salt: salt}(address(this));
-
             account = new QuantumVaultAccount{salt: salt}(
                 entryPoint,
-                address(vault_)
+                address(this)
             );
 
             // Password params set post-deploy — does not affect CREATE2 address.
             account.initialize(merkleRoot, pubSeed, passwordCommit, msg.sender);
 
-            vault_.setAuthorizedAccount(address(account));
-
-            isAccount[address(account)]         = true;
-            accountToVault[address(account)]    = address(vault_);
-            vaultToAccount[address(vault_)]     = address(account);
+            isAccount[address(account)] = true;
             _userAccounts[msg.sender].push(address(account));
 
-            unchecked { nextVaultIndex[msg.sender]++; }
+            unchecked { nextAccountIndex[msg.sender]++; }
 
-            emit AccountCreated(address(account), address(vault_), merkleRoot);
+            emit AccountCreated(address(account), merkleRoot);
         } else {
-            // Already exists — refund and return existing pair.
+            // Already exists — refund and return existing account.
             if (msg.value > 0) {
                 (bool ok, ) = msg.sender.call{value: msg.value}("");
                 if (!ok) revert TransferFailed();
             }
             account = QuantumVaultAccount(payable(predictedAccount));
-            vault_  = QuantumVault(payable(accountToVault[address(account)]));
         }
     }
 
@@ -124,37 +114,23 @@ contract QuantumVaultAccountFactory is Ownable {
         return _userAccounts[user].length;
     }
 
-    /// @notice Predict the account address from (creator, vaultIndex) — no password needed.
+    /// @notice Predict the account address from (creator, accountIndex) — no password needed.
     function getAddress(
         address creator,
-        uint32  vaultIndex
+        uint32  accountIndex
     ) public view returns (address predicted) {
-        bytes32 salt = keccak256(abi.encode(creator, vaultIndex));
+        bytes32 salt = keccak256(abi.encode(creator, accountIndex));
 
-        bytes memory vaultInitCode = abi.encodePacked(
-            type(QuantumVault).creationCode,
-            abi.encode(address(this))
-        );
-        address predictedVault = address(
-            uint160(uint256(keccak256(abi.encodePacked(
-                bytes1(0xff), address(this), salt, keccak256(vaultInitCode)
-            ))))
-        );
-
-        bytes memory accountInitCode = abi.encodePacked(
+        bytes memory initCode = abi.encodePacked(
             type(QuantumVaultAccount).creationCode,
-            abi.encode(entryPoint, predictedVault)
+            abi.encode(entryPoint, address(this))
         );
 
         predicted = address(
             uint160(uint256(keccak256(abi.encodePacked(
-                bytes1(0xff), address(this), salt, keccak256(accountInitCode)
+                bytes1(0xff), address(this), salt, keccak256(initCode)
             ))))
         );
-    }
-
-    function getVaultAddress(address account) external view returns (address) {
-        return accountToVault[account];
     }
 
     // ── Owner ─────────────────────────────────────────────────────────────────

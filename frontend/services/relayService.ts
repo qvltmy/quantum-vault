@@ -81,12 +81,17 @@ export async function getRelayChains(): Promise<RelayChain[]> {
 
 /** Fetch bridgeable/swappable currencies on a given chain. */
 export async function getRelayCurrencies(chainId: number): Promise<RelayCurrency[]> {
-  const res = await fetch(`${RELAY_API}/currencies/v1?chainId=${chainId}&verified=true`);
-  if (!res.ok) throw new Error(`Relay /currencies failed: ${res.status}`);
+  const res = await fetch(`${RELAY_API}/currencies/v1`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ chainIds: [chainId] }),
+  });
+  if (!res.ok) throw new Error(`Relay /currencies/v1 failed: ${res.status}`);
   const data = await res.json();
-  // Also include native ETH which may not be in the list
-  const currencies: RelayCurrency[] = data.currencies ?? data ?? [];
-  return currencies;
+  // Response is array-of-arrays: [[token,...],[token,...]]
+  // Flatten and filter verified only
+  const flat: RelayCurrency[] = (data as any[][]).flat();
+  return flat.filter(c => c.metadata?.verified !== false || c.symbol === 'ETH' || c.symbol === 'USDC');
 }
 
 export interface QuoteParams {
@@ -184,11 +189,25 @@ export function buildERC20ActionCalldata(
   }
   const approveTx = quote.steps[0].items[0].data; // approve
   const depositTx = quote.steps[1].items[0].data; // deposit
+
+  // approveTx.to = token address; actual spender is encoded inside approveTx.data
+  // decode approve(address spender, uint256 amount) → grab spender from calldata bytes 4..35
+  let spender: string;
+  try {
+    [spender] = ethers.AbiCoder.defaultAbiCoder().decode(
+      ['address', 'uint256'],
+      '0x' + approveTx.data.slice(10), // skip 4-byte selector
+    ) as unknown as [string, bigint];
+  } catch {
+    // fallback: relay router is depositTx.to
+    spender = depositTx.to;
+  }
+
   return iface.encodeFunctionData('executeERC20ExternalCall', [
     tokenAddress,
     tokenAmount,
-    approveTx.to,  // spender (depository or approvalProxy)
-    depositTx.to,  // call target
+    spender,        // relay router (decoded from approve calldata)
+    depositTx.to,   // call target (relay router contract)
     depositTx.data,
   ]);
 }

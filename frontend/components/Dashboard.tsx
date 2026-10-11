@@ -148,13 +148,13 @@ const Dashboard: React.FC<DashboardProps> = ({
 
   const { t } = useLanguage();
 
-  const effectiveChainId = isDemo ? 1n : user.chainId;
+  const effectiveChainId = isDemo ? 4663n : user.chainId;
   const currentChain = CHAINS.find(c => BigInt(c.id) === effectiveChainId);
   const nativeTicker = currentChain ? currentChain.ticker : "ETH";
-  const chainLabel   = currentChain?.label ?? currentChain?.name ?? "BNB Smart Chain Mainnet";
+  const chainLabel   = currentChain?.label ?? currentChain?.name ?? "Robinhood Chain";
   // Per-chain ERC-20 token list (index 0 is wrapped native — skip it for the quick-pick grid
   // since native is shown separately; slice from 1 to get ERC-20 choices)
-  const chainTokens  = getChainTokens(user.chainId);
+  const chainTokens  = getChainTokens(effectiveChainId);
   // Quick-pick ERC-20s: skip index 0 (wrapped native) for chains where native ≠ ERC-20
   const quickPickTokens = chainTokens.slice(1);
 
@@ -403,8 +403,10 @@ const Dashboard: React.FC<DashboardProps> = ({
   );
 
   const nativeBal = vaultState.nativeBalance ? parseFloat(ethers.formatEther(vaultState.nativeBalance)).toFixed(4) : "0.00";
-  // Logic: Native Token (1) + ERC20 Tokens with Balance
-  const totalAssetsCount = (vaultState.vaultTokens.length + 1).toString(); 
+  const totalAssetsCount = (
+    vaultState.vaultTokens.filter(t => (t.balance ?? 0n) > 0n).length +
+    (vaultState.nativeBalance > 0n ? 1 : 0)
+  ).toString();
 
   return (
       <div className="max-w-7xl mx-auto pb-20 pt-4 md:pt-8 animate-fade-in px-3 sm:px-6">

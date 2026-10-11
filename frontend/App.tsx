@@ -305,6 +305,8 @@ function App() {
     } else {
       window.history.replaceState(null, '', '#' + view);
     }
+    // Scroll to top on every page switch
+    window.scrollTo({ top: 0, behavior: 'instant' });
   };
 
   const showToast = (msg: string, type: 'success' | 'error' | 'info' = 'info') => {
@@ -660,8 +662,11 @@ function App() {
         const address = accounts[0];
         const { addr } = JSON.parse(storedAuth);
         if (address.toLowerCase() === addr.toLowerCase()) {
-           const bal = await provider.getBalance(address);
-           const chainId = (await provider.getNetwork()).chainId;
+           // Parallelize balance + network — two independent RPC calls
+           const [bal, chainId] = await Promise.all([
+             provider.getBalance(address),
+             provider.getNetwork().then(n => n.chainId),
+           ]);
            setUser({ address, nativeBalance: bal, isConnected: true, chainId });
            fetchUserVaults(address, chainId);
         } else {
@@ -714,6 +719,17 @@ function App() {
     localStorage.setItem(STORAGE_DEMO_KEY, '1');
     // Also store account so loadVaultAddress effect doesn't clobber it
     localStorage.setItem(STORAGE_VAULT_KEY, DEMO_ACCOUNT_ADDR);
+    // Set a placeholder vaultState immediately so the dashboard renders without
+    // waiting for cold RPC connections. refreshVault will overwrite with real data.
+    setVaultState({
+      vaultAddress: DEMO_VAULT_ADDR,
+      accountAddress: DEMO_ACCOUNT_ADDR,
+      nativeBalance: 0n,
+      chainId: DEMO_CHAIN_ID,
+      primaryMerkleRoot: ethers.ZeroHash,
+      isPaused: false,
+      vaultTokens: [],
+    });
     handleNavigate('dashboard');
   };
 
@@ -722,13 +738,25 @@ function App() {
     // Demo mode: use a public JSON-RPC provider instead of wallet
     if (isDemoMode && vaultAddress) {
       try {
-        const provider = new ethers.JsonRpcProvider(DEMO_RPC);
+        // Pass static network so ethers skips the extra eth_chainId auto-detect call.
+        // Race two RPCs so a cold/slow connection on one doesn't stall the UI.
+        const robinhoodNet = new ethers.Network('Robinhood', 4663);
+        const makeProvider = (url: string) =>
+          new ethers.JsonRpcProvider(url, robinhoodNet, { staticNetwork: robinhoodNet } as any);
+
+        const raceBalance = async (url: string) => {
+          const p = makeProvider(url);
+          const b = await p.getBalance(vaultAddress);
+          return { p, b };
+        };
+
+        const { p: provider, b: bal } = await Promise.any([
+          raceBalance(DEMO_RPC),
+          raceBalance('https://rpc.mainnet.chain.robinhood.com'),
+        ]);
         const chainId = DEMO_CHAIN_ID;
 
-        const pBal = provider.getBalance(vaultAddress);
         const accountContract = new ethers.Contract(accountAddress!, ACCOUNT_ABI, provider);
-        const pPrimaryMerkleRoot = accountContract.primaryMerkleRoot();
-        const [bal, primaryMerkleRoot] = await Promise.all([pBal, pPrimaryMerkleRoot]);
 
         const storedCustomTokens: string[] = JSON.parse(localStorage.getItem(STORAGE_CUSTOM_TOKENS) || '[]');
         const chainTokens = getChainTokens(chainId);
@@ -739,23 +767,27 @@ function App() {
           }
         });
 
-        const tokenPromises = tokensToCheck.map(async (t) => {
-          try {
-            const tokenContract = new ethers.Contract(t.address, ERC20_ABI, provider);
-            const tBal = await tokenContract.balanceOf(vaultAddress);
-            if (t.symbol === 'UNKNOWN') {
-              try {
-                const [symbol, decimals] = await Promise.all([tokenContract.symbol(), tokenContract.decimals()]);
-                return { ...t, symbol, decimals, balance: tBal };
-              } catch { return { ...t, symbol: 'Custom', balance: tBal }; }
-            }
-            // In demo mode always show all chain tokens (even 0-balance ones)
-            return { ...t, balance: tBal };
-          } catch {}
-          return null;
+        // Fire primaryMerkleRoot + all token balances in parallel
+        const tokenContracts = tokensToCheck.map(t => new ethers.Contract(t.address, ERC20_ABI, provider));
+        const [primaryMerkleRoot, ...tokenBals] = await Promise.all([
+          accountContract.primaryMerkleRoot().catch(() => ethers.ZeroHash),
+          ...tokenContracts.map(tc => tc.balanceOf(vaultAddress).catch(() => 0n)),
+        ]);
+
+        // Resolve UNKNOWN token metadata (symbol+decimals) in parallel
+        const tokenInfoPromises = tokensToCheck.map(async (t, i) => {
+          const tBal: bigint = tokenBals[i];
+          if (t.symbol === 'UNKNOWN') {
+            try {
+              const tc = tokenContracts[i];
+              const [symbol, decimals] = await Promise.all([tc.symbol(), tc.decimals()]);
+              return { ...t, symbol, decimals, balance: tBal };
+            } catch { return { ...t, symbol: 'Custom', balance: tBal }; }
+          }
+          // In demo mode always show all chain tokens (even 0-balance ones)
+          return { ...t, balance: tBal };
         });
-        const results = await Promise.all(tokenPromises);
-        const tokenInfos: TokenInfo[] = results.filter(Boolean) as TokenInfo[];
+        const tokenInfos: TokenInfo[] = (await Promise.all(tokenInfoPromises)).filter(Boolean) as TokenInfo[];
 
         setVaultState({
           vaultAddress,
@@ -804,36 +836,33 @@ function App() {
       // (it would show a separate "WBNB" entry with the same value — confusing).
       // On other chains the wrapped native (WETH, WMATIC …) is a real ERC-20 and IS scanned.
       const skipSymbol = chainId === 56n ? "WBNB" : null;
+      const filteredTokens = tokensToCheck.filter(t => !(skipSymbol && t.symbol === skipSymbol));
 
-      const tokenPromises = tokensToCheck.map(async (t) => {
-         if (skipSymbol && t.symbol === skipSymbol) return null;
-         try {
-            const tokenContract = new ethers.Contract(t.address, ERC20_ABI, provider);
-            const tBal = await tokenContract.balanceOf(vaultAddress);
-            
-            if (tBal > 0n) {
-                if (t.symbol === 'UNKNOWN') {
-                    try {
-                        const [symbol, decimals] = await Promise.all([
-                            tokenContract.symbol(),
-                            tokenContract.decimals()
-                        ]);
-                        return { ...t, symbol, decimals, balance: tBal };
-                    } catch {
-                        return { ...t, symbol: 'Custom', balance: tBal };
-                    }
-                }
-                return { ...t, balance: tBal };
-            }
-         } catch (e) {
-            // Ignore individual token failures
-         }
-         return null;
+      // Phase 1: fire all balanceOf calls in parallel (one RPC batch round-trip)
+      const tokenContracts = filteredTokens.map(t => new ethers.Contract(t.address, ERC20_ABI, provider));
+      const balResults = await Promise.allSettled(
+        tokenContracts.map(tc => tc.balanceOf(vaultAddress))
+      );
+
+      // Phase 2: for tokens with balance, fetch UNKNOWN metadata in parallel
+      const tokenInfoPromises = filteredTokens.map(async (t, i) => {
+        const r = balResults[i];
+        if (r.status !== 'fulfilled') return null;
+        const tBal: bigint = r.value;
+        if (!(tBal > 0n)) return null;
+        if (t.symbol === 'UNKNOWN') {
+          try {
+            const tc = tokenContracts[i];
+            const [symbol, decimals] = await Promise.all([tc.symbol(), tc.decimals()]);
+            return { ...t, symbol, decimals, balance: tBal };
+          } catch {
+            return { ...t, symbol: 'Custom', balance: tBal };
+          }
+        }
+        return { ...t, balance: tBal };
       });
-      
-      const results = await Promise.all(tokenPromises);
-      const tokenInfos: TokenInfo[] = [];
-      results.forEach(r => { if(r) tokenInfos.push(r); });
+
+      const tokenInfos: TokenInfo[] = (await Promise.all(tokenInfoPromises)).filter(Boolean) as TokenInfo[];
 
       setVaultState({
         vaultAddress,
@@ -866,7 +895,7 @@ function App() {
         handleNavigate('landing');
       }
     }
-  }, [vaultAddress, isDemoMode, user.isConnected, user.address, getEthereumObject, t]);
+  }, [vaultAddress, accountAddress, isDemoMode, user.isConnected, user.address, getEthereumObject, t]);
 
   const checkIsAuthorizer = useCallback(async (address: string): Promise<boolean> => {
     if (!vaultAddress || !address) return false;
@@ -1082,6 +1111,8 @@ function App() {
 
       if (newAddr) {
         setAccountAddress(newAddr);
+        setIsDemoMode(false);
+        localStorage.removeItem(STORAGE_DEMO_KEY);
         localStorage.setItem(STORAGE_VAULT_KEY, newAddr);
         addToHistory(newAddr);
         
@@ -1135,13 +1166,21 @@ function App() {
       const eth = getProviderObject(localStorage.getItem(STORAGE_WALLET_TYPE));
       if (!eth) return;
       const provider = new ethers.BrowserProvider(eth);
-      const factory = new ethers.Contract(getFactoryAddress(user.chainId), [
+      // Always resolve chainId from provider — user.chainId closure may be stale (0n)
+      const effectiveChainId = (await provider.getNetwork()).chainId;
+      const factory = new ethers.Contract(getFactoryAddress(effectiveChainId), [
         "function accountToVault(address) view returns (address)"
       ], provider);
       const vault = await factory.accountToVault(accAddr);
+      if (!vault || vault === ethers.ZeroAddress) {
+        showToast('Vault not found for this account', 'error');
+        return;
+      }
       setAccountAddress(accAddr);
       setVaultAddress(vault);
       setVaultState(null);
+      setIsDemoMode(false);
+      localStorage.removeItem(STORAGE_DEMO_KEY);
       localStorage.setItem(STORAGE_VAULT_KEY, accAddr);
       handleNavigate('dashboard');
       showToast('Switched to vault ' + accAddr.slice(0, 8) + '…', 'success');

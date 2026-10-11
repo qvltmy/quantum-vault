@@ -204,14 +204,9 @@ export const CHAIN_TOKENS: Record<number, Omit<TokenInfo, 'balance'>[]> = {
     { symbol: 'USDG',    address: '0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168', decimals: 6  },
     { symbol: 'cbBTC',   address: '0xCEC185eB182c47d1bA1EFc84e6959e18cd620Be4', decimals: 8  },
     { symbol: 'USDe',    address: '0x5d3a1Ff2b6BAb83b63cd9AD0787074081a52ef34', decimals: 18 },
-    { symbol: 'U',       address: '0xcE24439F2D9C6a2289F741120FE202248B666666', decimals: 18 },
     { symbol: 'LINK',    address: '0x492641F648a4986844848E0beFE66D14817bCE34', decimals: 18 },
-    { symbol: 'PENGU',   address: '0x74BE72AFFAFbC8de30F0C11247814036314D625f', decimals: 18 },
     { symbol: 'VIRTUAL', address: '0xc6911796042b15d7Fa4F6CDe69e245DdCd3d9c31', decimals: 18 },
-    { symbol: 'PENDLE',  address: '0x5E49E1f85813F2B65858860A3FA231b4186f2e0E', decimals: 18 },
     { symbol: 'PONS',    address: '0x39dBED3a2bd333467115dE45665cC57F813C4571', decimals: 18 },
-    { symbol: 'LIT',     address: '0xeeca2E7Dc194a320d349122d88259bB9595a4cB0', decimals: 18 },
-    { symbol: 'APE',     address: '0x8f86a15EC17cb3369d8b3E666dAdBC11daA82b79', decimals: 18 },
   ],
 };
 

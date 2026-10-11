@@ -197,7 +197,7 @@ const Docs: React.FC = () => {
               <div className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-2">Version</div>
               <div className="text-xs text-slate-300 font-mono">v2.0 — Quantum Vault</div>
               <div className="text-[10px] text-slate-400 mt-1">WOTS+ Merkle Tree · 6-chain deployment</div>
-              <div className="text-[10px] text-slate-400 mt-0.5 font-mono break-all">Factory: 0xb473...9744</div>
+              <div className="text-[10px] text-slate-400 mt-0.5 font-mono break-all">Factory: 0x6936...808D</div>
             </div>
           </div>
         </aside>
@@ -248,7 +248,7 @@ const Docs: React.FC = () => {
                 <InfoBox type="success">
                   <strong>Key property:</strong> signing keys are derived and used locally; the account contract verifies the submitted WOTS+ proof and never receives the password or master seed.
                   <br /><br />
-                  <strong>Deployment:</strong> factory deployed and source-verified on 6 chains — Ethereum, BNB Chain, Base, Arbitrum, Polygon, and Robinhood Chain — all at the same address <code>0xb473acF11db7F27F59213C7FE07D47d0eC569744</code>.
+                  <strong>Deployment:</strong> factory deployed and source-verified on 6 chains — Ethereum, BNB Chain, Base, Arbitrum, Polygon, and Robinhood Chain — all at the same address <code>0x693671914331B6FaaCEeD66A805D33aa95D8808D</code>.
                 </InfoBox>
 
               <InfoBox type="warning">
@@ -801,19 +801,19 @@ bytes32 opHash = keccak256(abi.encode(
               <div className="p-4 rounded-xl border border-cyan-100/[0.11] bg-white/3 text-sm">
                 <div className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-3">Deployed &amp; Verified — All 6 Chains</div>
                 <div className="space-y-1.5 font-mono text-xs">
-                  <div className="flex justify-between"><span className="text-slate-400">Factory (all chains)</span><span className="text-teal-300">0xb473acF11db7F27F59213C7FE07D47d0eC569744</span></div>
+                  <div className="flex justify-between"><span className="text-slate-400">Factory (all chains)</span><span className="text-teal-300">0x693671914331B6FaaCEeD66A805D33aa95D8808D</span></div>
                   <div className="flex justify-between"><span className="text-slate-400">EntryPoint</span><span className="text-slate-300">0x0000000071727De22E5E9d8BAf0edAc6f37da032</span></div>
                   <div className="flex justify-between"><span className="text-slate-400">EVM version</span><span className="text-slate-300">cancun</span></div>
                   <div className="flex justify-between"><span className="text-slate-400">Compiler</span><span className="text-slate-300">v0.8.28+commit.7893614a · via_ir · runs=200</span></div>
                 </div>
                 <div className="mt-3 grid grid-cols-2 sm:grid-cols-3 gap-2 text-[11px]">
                   {[
-                    { name: 'Ethereum', id: 1,     url: 'https://etherscan.io/address/0xb473acF11db7F27F59213C7FE07D47d0eC569744' },
-                    { name: 'BNB Chain', id: 56,   url: 'https://bscscan.com/address/0xb473acF11db7F27F59213C7FE07D47d0eC569744' },
-                    { name: 'Base',      id: 8453,  url: 'https://basescan.org/address/0xb473acF11db7F27F59213C7FE07D47d0eC569744' },
-                    { name: 'Arbitrum',  id: 42161, url: 'https://arbiscan.io/address/0xb473acF11db7F27F59213C7FE07D47d0eC569744' },
-                    { name: 'Polygon',   id: 137,   url: 'https://polygonscan.com/address/0xb473acF11db7F27F59213C7FE07D47d0eC569744' },
-                    { name: 'Robinhood', id: 4663,  url: 'https://robin.etherscan.io/address/0xb473acF11db7F27F59213C7FE07D47d0eC569744' },
+                    { name: 'Ethereum', id: 1,     url: 'https://etherscan.io/address/0x693671914331B6FaaCEeD66A805D33aa95D8808D' },
+                    { name: 'BNB Chain', id: 56,   url: 'https://bscscan.com/address/0x693671914331B6FaaCEeD66A805D33aa95D8808D' },
+                    { name: 'Base',      id: 8453,  url: 'https://basescan.org/address/0x693671914331B6FaaCEeD66A805D33aa95D8808D' },
+                    { name: 'Arbitrum',  id: 42161, url: 'https://arbiscan.io/address/0x693671914331B6FaaCEeD66A805D33aa95D8808D' },
+                    { name: 'Polygon',   id: 137,   url: 'https://polygonscan.com/address/0x693671914331B6FaaCEeD66A805D33aa95D8808D' },
+                    { name: 'Robinhood', id: 4663,  url: 'https://sourcify.dev/#/lookup/0x693671914331B6FaaCEeD66A805D33aa95D8808D' },
                   ].map(({ name, id, url }) => (
                     <a key={id} href={url} target="_blank" rel="noreferrer"
                       className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-cyan-500/20 bg-cyan-500/5 text-cyan-300 hover:bg-cyan-500/10 transition-colors">

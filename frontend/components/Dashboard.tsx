@@ -6,7 +6,7 @@ import {
   Plus, AlertTriangle, Shield, ShieldCheck, Trash2, KeyRound, LogOut, Lock, 
   Wallet, Coins, Users, Search, Info, CheckCircle2,
   X, ChevronDown, ChevronUp, Check, Clock, Lightbulb, Zap, Loader2, UserCheck, UserX,
-  PieChart, Activity
+  PieChart, Activity, ArrowDownUp
 } from 'lucide-react';
 import { VaultState, UserState, getChainTokens, TokenInfo, CHAINS } from '../types';
 import { useLanguage } from '../contexts/LanguageContext';
@@ -20,6 +20,7 @@ interface DashboardProps {
   onConnect: () => void;
   onDeposit: (amount: string, token: string, symbol: string, isCustom: boolean) => void; 
   onInitiateWithdraw: (amount: string, to: string, token: string, symbol: string) => void;
+  onSwap: () => void;
   onRotateEcdsaSigner: (newPw: string, currentPw: string) => Promise<void>;
   onSecureAction: (desc: string, action: (pw: string) => Promise<void>) => void;
   onAddAdmin: (adminAddr: string, pw: string) => Promise<void>;
@@ -110,9 +111,9 @@ const Dashboard: React.FC<DashboardProps> = ({
   onDeposit, onInitiateWithdraw, onRotateEcdsaSigner,
   onSecureAction, onAddAdmin, onRemoveAdmin,
   loading, fetchUserTokenBalance, checkIsAuthorizer, isRestoring, lastSuccessTime,
-  isDemo = false
+  isDemo = false, onSwap
 }) => {
-  const [activeTab, setActiveTab] = useState<'deposit' | 'withdraw' | 'admin'>('deposit');
+  const [activeTab, setActiveTab] = useState<'deposit' | 'withdraw' | 'swap' | 'admin'>('deposit');
   
   // Deposit State
   const [depositAmount, setDepositAmount] = useState("");
@@ -506,6 +507,7 @@ const Dashboard: React.FC<DashboardProps> = ({
       <div className="p-1.5 mb-6 flex bg-[#0b1424]/80 backdrop-blur-xl rounded-2xl border border-cyan-100/[0.11] shadow-2xl overflow-x-auto no-scrollbar gap-1 max-w-2xl mx-auto">
          <TabButton active={activeTab === 'deposit'} onClick={() => setActiveTab('deposit')} icon={<ArrowDownToLine size={16}/>} label={t('dash.tab.deposit')} />
          <TabButton active={activeTab === 'withdraw'} onClick={() => setActiveTab('withdraw')} icon={<ArrowRightLeft size={16}/>} label={t('dash.tab.withdraw')} />
+         <TabButton active={activeTab === 'swap'} onClick={() => { setActiveTab('swap'); onSwap?.(); }} icon={<ArrowDownUp size={16}/>} label="Swap" />
          {true && (
             <TabButton active={activeTab === 'admin'} onClick={() => setActiveTab('admin')} icon={<Settings size={16}/>} label={t('dash.tab.admin')} />
          )}

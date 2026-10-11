@@ -20,6 +20,9 @@ import GasSeparationModal from './components/GasSeparationModal';
 import ProcessModal, { ProcessStep } from './components/ProcessModal';
 import { GuideModal, PrivacyModal } from './components/InfoModals';
 import { DepositConfirmModal, WithdrawConfirmModal } from './components/ActionModals';
+import SwapModal from './components/SwapModal';
+import { buildNativeActionCalldata, buildERC20ActionCalldata, pollRelayStatus } from './services/relayService';
+import type { RelayQuote } from './services/relayService';
 
 // Unified helper function to get the correct wallet provider object
 const getProviderObject = (type: string | null): any => {
@@ -92,6 +95,8 @@ const ACCOUNT_ABI = [
   "function directExecute(bytes32 signerMerkleRoot, uint32 leafIndex, bytes32[67] otsPubKey, bytes32[67] otsSig, bytes32[] merkleProof, bytes32 inbandNewRoot, bytes32 inbandNewPubSeed, bytes32 passwordPreimage, bytes actionCalldata, bytes walletSig) external",
   "function executeNativeWithdrawal(address payable recipient, uint256 amount) external",
   "function executeERC20Withdrawal(address token, address recipient, uint256 amount) external",
+  "function executeExternalCall(address to, uint256 nativeAmount, bytes calldata data) external",
+  "function executeERC20ExternalCall(address token, uint256 tokenAmount, address spender, address to, bytes calldata data) external",
   "function rotateMerkleRoot(bytes32 oldRoot, bytes32 newRoot, bytes32 newPubSeed) external",
   "function addAdmin(bytes32 newMerkleRoot, bytes32 newPubSeed) external",
   "function removeAdmin(bytes32 merkleRoot) external",
@@ -269,6 +274,9 @@ function App() {
   
   const [showWithdrawModal, setShowWithdrawModal] = useState(false);
   const [pendingWithdraw, setPendingWithdraw] = useState<{amount: string, to: string, token: string, symbol: string} | null>(null);
+
+  const [showSwapModal, setShowSwapModal] = useState(false);
+  const [pendingSwapQuote, setPendingSwapQuote] = useState<{ quote: RelayQuote; originCurrency: string; amount: bigint } | null>(null);
 
   // New Process State
   const [processState, setProcessState] = useState<{
@@ -1603,6 +1611,45 @@ function App() {
     setPendingWithdraw(null);
   };
 
+  // ── Relay Swap/Bridge ─────────────────────────────────────────────────────
+  const handleSwapConfirm = (quote: RelayQuote, originCurrency: string, amount: bigint) => {
+    setShowSwapModal(false);
+    setPendingSwapQuote({ quote, originCurrency, amount });
+    setShowPwModal({
+      isOpen: true,
+      action: isDemoMode ? executeDemoVerify : executeSwap,
+      desc: 'Enter your vault password to authorize this swap/bridge.',
+    });
+  };
+
+  const executeSwap = async (pw: string) => {
+    if (!pendingSwapQuote || !accountAddress || !vaultAddress || !user.address) return;
+    const { quote, originCurrency, amount } = pendingSwapQuote;
+    const ETH_ADDR = '0x0000000000000000000000000000000000000000';
+    const isNative = originCurrency === ETH_ADDR;
+    const actionCalldata = isNative
+      ? buildNativeActionCalldata(quote, amount)
+      : buildERC20ActionCalldata(quote, originCurrency, amount);
+
+    await executeDirectOp(
+      pw,
+      'Swap / Bridge',
+      async () => actionCalldata,
+      'Swap submitted — Relay solver is processing.'
+    );
+
+    // After directExecute lands, poll Relay status in background
+    const requestId = quote.requestId;
+    pollRelayStatus(requestId, (status) => {
+      if (status === 'success') {
+        showToast('Relay swap completed ✓', 'success');
+        refreshVault(true);
+      }
+    }).catch(() => {});
+
+    setPendingSwapQuote(null);
+  };
+
   const handleRotateEcdsaSigner = async (newPw: string, currentPw: string) => {
     // Password change: derives entirely new master seed → resets generation to 0 for new password
     if (!accountAddress || !user.address) return;
@@ -1858,7 +1905,8 @@ function App() {
               onExit={handleExitVault}
               onConnect={() => setShowWalletModal(true)}
               onDeposit={handleInitiateDeposit}
-              onInitiateWithdraw={handleInitiateWithdraw} 
+              onInitiateWithdraw={handleInitiateWithdraw}
+              onSwap={() => setShowSwapModal(true)}
               onRotateEcdsaSigner={(newPw: string, currentPw: string) => handleRotateEcdsaSigner(newPw, currentPw)}
               onSecureAction={(desc, action) => setShowPwModal({ isOpen: true, action: isDemoMode ? executeDemoVerify : action, desc })}
               onAddAdmin={handleAddAdmin}
@@ -1921,6 +1969,21 @@ function App() {
         amount={pendingWithdraw?.amount || "0"}
         symbol={pendingWithdraw?.symbol || "ETH"}
         toAddress={pendingWithdraw?.to || "0x..."}
+        loading={loading}
+      />
+
+      <SwapModal
+        isOpen={showSwapModal}
+        onClose={() => { setShowSwapModal(false); setPendingSwapQuote(null); }}
+        vaultAddress={vaultAddress ?? ''}
+        nativeBalance={BigInt(vaultState?.nativeBalance ?? '0')}
+        vaultTokens={(vaultState?.vaultTokens ?? []).map((t: import('./types').TokenInfo) => ({
+          symbol: t.symbol,
+          address: t.address,
+          decimals: t.decimals,
+          balance: t.balance,
+        }))}
+        onConfirm={handleSwapConfirm}
         loading={loading}
       />
 

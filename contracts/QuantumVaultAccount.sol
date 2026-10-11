@@ -227,6 +227,39 @@ contract QuantumVaultAccount is BaseAccount, IAccountExecute {
         vault.withdrawERC20(token, recipient, amount);
     }
 
+    // ── External call forwarding (for Relay swap/bridge) ─────────────────────
+    // Pulls ETH from vault into account, then calls an external contract (e.g.
+    // Relay depository or erc20Router). Used for native-token swaps and bridges.
+    function executeExternalCall(
+        address to,
+        uint256 nativeAmount,
+        bytes calldata data
+    ) external onlyEntryPointOrSelf {
+        if (nativeAmount > 0) {
+            vault.withdrawNative(payable(address(this)), nativeAmount);
+        }
+        (bool ok, bytes memory ret) = to.call{value: nativeAmount}(data);
+        if (!ok) assembly { revert(add(ret, 0x20), mload(ret)) }
+    }
+
+    // Pulls ERC-20 from vault, approves spender, then calls target.
+    // Used for ERC-20 bridge/swap flows that need approve + deposit in one leaf.
+    function executeERC20ExternalCall(
+        address token,
+        uint256 tokenAmount,
+        address spender,
+        address to,
+        bytes calldata data
+    ) external onlyEntryPointOrSelf {
+        vault.withdrawERC20(IERC20(token), address(this), tokenAmount);
+        IERC20(token).approve(spender, tokenAmount);
+        (bool ok, bytes memory ret) = to.call(data);
+        if (!ok) assembly { revert(add(ret, 0x20), mload(ret)) }
+    }
+
+    // Allow account to receive ETH transiently (needed for executeExternalCall)
+    receive() external payable {}
+
     // ── directExecute (gas-separated flow) ───────────────────────────────────
     //
     // 1. Frontend calls buildDirectOpHash() (view, free) to get opHash.

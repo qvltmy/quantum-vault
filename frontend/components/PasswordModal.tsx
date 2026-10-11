@@ -11,6 +11,7 @@ interface PasswordModalProps {
   title?: string;
   description?: string;
   isLoading?: boolean;
+  error?: string;
 }
 
 const PasswordModal: React.FC<PasswordModalProps> = ({ 
@@ -19,17 +20,22 @@ const PasswordModal: React.FC<PasswordModalProps> = ({
   onConfirm, 
   title, 
   description,
-  isLoading = false
+  isLoading = false,
+  error
 }) => {
   const [password, setPassword] = useState("");
   const [showPw, setShowPw] = useState(false);
   const { t } = useLanguage();
 
+  // Clear password when modal closes
+  React.useEffect(() => {
+    if (!isOpen) setPassword("");
+  }, [isOpen]);
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (password) {
       onConfirm(password);
-      setPassword(""); // Clear after submit attempt
     }
   };
 
@@ -47,7 +53,7 @@ const PasswordModal: React.FC<PasswordModalProps> = ({
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             placeholder={t('modal.pw.input')}
-            className="w-full h-12 rounded-xl bg-slate-900/50 border border-slate-600 px-4 text-white placeholder-slate-500 focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none transition-all font-mono"
+            className={`w-full h-12 rounded-xl bg-slate-900/50 border px-4 text-white placeholder-slate-500 outline-none transition-all font-mono ${error ? 'border-red-500/70 focus:border-red-500 focus:ring-1 focus:ring-red-500/50' : 'border-slate-600 focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500'}`}
             autoFocus
           />
           <button
@@ -58,6 +64,12 @@ const PasswordModal: React.FC<PasswordModalProps> = ({
             {showPw ? <EyeOff size={16} /> : <Eye size={16} />}
           </button>
         </div>
+        {error && (
+          <div className="flex items-center gap-1.5 px-1 text-xs text-red-400 font-bold animate-fade-in">
+            <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>
+            {error}
+          </div>
+        )}
 
         <div className="flex gap-3 mt-2">
           <button

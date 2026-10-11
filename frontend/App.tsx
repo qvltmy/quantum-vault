@@ -257,7 +257,7 @@ function App() {
   const [toast, setToast] = useState<{ msg: string; type: 'success' | 'error' | 'info' } | null>(null);
   
   // Modals
-  const [showPwModal, setShowPwModal] = useState<{ isOpen: boolean; action?: (pw: string) => Promise<void>; desc?: string }>({ isOpen: false });
+  const [showPwModal, setShowPwModal] = useState<{ isOpen: boolean; action?: (pw: string) => Promise<void>; desc?: string; error?: string }>({ isOpen: false });
   const [showWalletModal, setShowWalletModal] = useState(false);
   const [showGuide, setShowGuide] = useState(false);
   const [showPrivacy, setShowPrivacy] = useState(false);
@@ -729,6 +729,7 @@ function App() {
       primaryMerkleRoot: ethers.ZeroHash,
       isPaused: false,
       vaultTokens: [],
+      isLoading: true,
     });
     handleNavigate('dashboard');
   };
@@ -1255,7 +1256,7 @@ function App() {
     successMsg: string
   ) => {
     if (!accountAddress || !user.address) return;
-    setShowPwModal({ isOpen: false });
+    setShowPwModal(prev => ({ ...prev, isOpen: false, error: undefined }));
     setProcessState({ isOpen: true, step: 'hashing', title, skipHashing: false });
 
     try {
@@ -1412,7 +1413,25 @@ function App() {
       setLastSuccessTime(Date.now());
       refreshVault();
     } catch (e: any) {
-      setProcessState(prev => ({ ...prev, step: 'error', error: getFriendlyError(e) }));
+      const msg: string = e?.message || String(e);
+      const isWrongPw =
+        msg.includes('wrong password') ||
+        msg.includes('Wrong password') ||
+        msg.includes('merkle root is not registered') ||
+        msg.includes('invalidpasswordproof') ||
+        msg.includes('InvalidPasswordProof');
+
+      if (isWrongPw) {
+        // Wrong password — close process modal, re-open password modal with inline error
+        setProcessState(prev => ({ ...prev, isOpen: false }));
+        setShowPwModal(prev => ({
+          ...prev,
+          isOpen: true,
+          error: 'Incorrect password. Please try again.',
+        }));
+      } else {
+        setProcessState(prev => ({ ...prev, step: 'error', error: getFriendlyError(e) }));
+      }
     }
   };
 
@@ -1585,7 +1604,25 @@ function App() {
       setProcessState(prev => ({ ...prev, step: 'success', successMsg: 'Password changed. Vault now uses the new password and a fresh signing key tree (gen 0).' }));
       setLastSuccessTime(Date.now());
     } catch (e: any) {
-      setProcessState(prev => ({ ...prev, step: 'error', error: getFriendlyError(e) }));
+      const msg: string = e?.message || String(e);
+      const isWrongPw =
+        msg.includes('Wrong current password') ||
+        msg.includes('wrong current password') ||
+        msg.includes('wrong password') ||
+        msg.includes('merkle root is not registered') ||
+        msg.includes('invalidpasswordproof') ||
+        msg.includes('InvalidPasswordProof');
+
+      if (isWrongPw) {
+        setProcessState(prev => ({ ...prev, isOpen: false }));
+        setShowPwModal(prev => ({
+          ...prev,
+          isOpen: true,
+          error: 'Incorrect current password. Please try again.',
+        }));
+      } else {
+        setProcessState(prev => ({ ...prev, step: 'error', error: getFriendlyError(e) }));
+      }
     }
   };
 
@@ -1702,6 +1739,7 @@ function App() {
         onConfirm={(pw) => showPwModal.action && showPwModal.action(pw)}
         description={showPwModal.desc}
         isLoading={loading}
+        error={showPwModal.error}
       />
 
       <ProcessModal 

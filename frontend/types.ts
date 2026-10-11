@@ -55,6 +55,24 @@ export const FACTORY_ADDRESS = '0xb473acF11db7F27F59213C7FE07D47d0eC569744';
 
 export const CHAINS: ChainConfig[] = [
   {
+    id: 4663,
+    name: 'Robinhood',
+    label: 'Robinhood Chain',
+    ticker: 'ETH',
+    rpc: 'https://rpc.mainnet.chain.robinhood.com',
+    rpcUrls: [
+      'https://rpc.mainnet.chain.robinhood.com',
+      'https://robinhood-rpc.publicnode.com',
+      'https://robinhood.drpc.org',
+    ],
+    active: true,
+    primary: true,
+    color: '#00C805',
+    explorer: 'https://robinhoodchain.blockscout.com',
+    nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 },
+    factoryAddress: FACTORY_ADDRESS,
+  },
+  {
     id: 1,
     name: 'Ethereum',
     label: 'Ethereum Mainnet',
@@ -62,7 +80,6 @@ export const CHAINS: ChainConfig[] = [
     rpc: 'https://ethereum.publicnode.com',
     rpcUrls: ['https://ethereum.publicnode.com', 'https://eth.llamarpc.com'],
     active: true,
-    primary: true,
     color: '#627EEA',
     explorer: 'https://etherscan.io',
     nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 },
@@ -120,23 +137,6 @@ export const CHAINS: ChainConfig[] = [
     nativeCurrency: { name: 'POL', symbol: 'POL', decimals: 18 },
     factoryAddress: FACTORY_ADDRESS,
   },
-  {
-    id: 4663,
-    name: 'Robinhood',
-    label: 'Robinhood Chain',
-    ticker: 'ETH',
-    rpc: 'https://rpc.mainnet.chain.robinhood.com',
-    rpcUrls: [
-      'https://rpc.mainnet.chain.robinhood.com',
-      'https://robinhood-rpc.publicnode.com',
-      'https://robinhood.drpc.org',
-    ],
-    active: true,
-    color: '#00C805',
-    explorer: 'https://robinhoodchain.blockscout.com',
-    nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 },
-    factoryAddress: FACTORY_ADDRESS,
-  },
 ];
 
 declare global {
@@ -169,11 +169,11 @@ export const CHAIN_TOKENS: Record<number, Omit<TokenInfo, 'balance'>[]> = {
   // ── BNB Smart Chain ───────────────────────────────────────────────────────
   56: [
     { symbol: 'WBNB',  address: '0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c', decimals: 18 },
-    { symbol: 'BTC',   address: '0x7130d2A12B9BCbFAe4f2634d864A1Ee1Ce3Ead9c', decimals: 18 },
+    { symbol: 'BTCB',  address: '0x7130d2A12B9BCbFAe4f2634d864A1Ee1Ce3Ead9c', decimals: 18 },
     { symbol: 'WETH',  address: '0x2170ed0880ac9a755fd29b2688956bd959f933f8', decimals: 18 },
     { symbol: 'USDT',  address: '0x55d398326f99059fF775485246999027B3197955', decimals: 18 },
     { symbol: 'USDC',  address: '0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d', decimals: 18 },
-    { symbol: 'BUSD',  address: '0xe9e7cea3dedca5984780bafc599bd69add087d56', decimals: 18 },
+    { symbol: 'FDUSD', address: '0xc5f0f7b66764F6ec8C8Dff7BA683102295E16409', decimals: 18 },
   ],
   // ── Base ─────────────────────────────────────────────────────────────────
   8453: [
@@ -195,12 +195,24 @@ export const CHAIN_TOKENS: Record<number, Omit<TokenInfo, 'balance'>[]> = {
     { symbol: 'WPOL',  address: '0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270', decimals: 18 },
     { symbol: 'WETH',  address: '0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619', decimals: 18 },
     { symbol: 'USDT',  address: '0xc2132D05D31c914a87C6611C10748AEb04B58e8F', decimals: 6  },
-    { symbol: 'USDC',  address: '0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174', decimals: 6  },
+    { symbol: 'USDC',  address: '0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359', decimals: 6  },
     { symbol: 'WBTC',  address: '0x1BFD67037B42Cf73acF2047067bd4F2C47D9BfD6', decimals: 8  },
   ],
   // ── Robinhood Chain (ETH L2, Arbitrum Orbit) ──────────────────────────────
+  // Verified on-chain via eth_call 2026-10-11. Sorted by on-chain market cap.
   4663: [
-    { symbol: 'USDG',  address: '0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168', decimals: 6  },
+    { symbol: 'WETH',    address: '0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73', decimals: 18 },
+    { symbol: 'USDG',    address: '0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168', decimals: 6  },
+    { symbol: 'cbBTC',   address: '0xCEC185eB182c47d1bA1EFc84e6959e18cd620Be4', decimals: 8  },
+    { symbol: 'USDe',    address: '0x5d3a1Ff2b6BAb83b63cd9AD0787074081a52ef34', decimals: 18 },
+    { symbol: 'U',       address: '0xcE24439F2D9C6a2289F741120FE202248B666666', decimals: 18 },
+    { symbol: 'LINK',    address: '0x492641F648a4986844848E0beFE66D14817bCE34', decimals: 18 },
+    { symbol: 'PENGU',   address: '0x74BE72AFFAFbC8de30F0C11247814036314D625f', decimals: 18 },
+    { symbol: 'VIRTUAL', address: '0xc6911796042b15d7Fa4F6CDe69e245DdCd3d9c31', decimals: 18 },
+    { symbol: 'PENDLE',  address: '0x5E49E1f85813F2B65858860A3FA231b4186f2e0E', decimals: 18 },
+    { symbol: 'PONS',    address: '0x39dBED3a2bd333467115dE45665cC57F813C4571', decimals: 18 },
+    { symbol: 'LIT',     address: '0xeeca2E7Dc194a320d349122d88259bB9595a4cB0', decimals: 18 },
+    { symbol: 'APE',     address: '0x8f86a15EC17cb3369d8b3E666dAdBC11daA82b79', decimals: 18 },
   ],
 };
 

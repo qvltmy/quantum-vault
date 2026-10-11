@@ -1099,10 +1099,9 @@ const passwordPreimage = derivePasswordPreimage(masterSeed);
                     { name: 'Base', role: 'Live — factory verified', spec: 'Chain ID 8453' },
                     { name: 'Arbitrum One', role: 'Live — factory verified', spec: 'Chain ID 42161' },
                     { name: 'Polygon', role: 'Live — factory verified', spec: 'Chain ID 137' },
-                    { name: 'Robinhood Chain', role: 'Live — factory verified (Arbitrum Orbit L2)', spec: 'Chain ID 4663' },
+                    { name: 'Robinhood Chain', role: 'Live — factory verified', spec: 'Chain ID 4663' },
                     { name: 'CREATE2', role: 'Deterministic paired (Account, Vault) addresses', spec: 'EIP-1014' },
                     { name: 'ERC-4337 Bundler', role: 'UserOp relay (optional — directExecute bypasses)', spec: 'Pimlico / Alchemy' },
-                    { name: 'NGINX', role: 'Static front-end serving + /api/prove reverse proxy', spec: 'Port 443 SSL' },
                   ],
                 },
               ].map(({ category, color, items }) => {

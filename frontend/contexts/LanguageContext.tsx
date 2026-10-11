@@ -372,6 +372,7 @@ const translations: Record<string, string> = {
     "wallet.desc.coin98": "The all-in-one DeFi gateway",
     "wallet.desc.safepal": "Secure hardware and software wallet",
     "wallet.desc.browser": "Browser extension wallet",
+    "wallet.desc.walletconnect": "Connect with any mobile wallet",
     "wallet.chain_active": "Active",
     "wallet.chain_soon": "Soon",
     "wallet.multichain": "Multi-Chain",

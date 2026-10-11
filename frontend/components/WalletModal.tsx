@@ -33,6 +33,67 @@ interface WalletOption {
   check: () => boolean;
 }
 
+const ChainLogo: React.FC<{ chain: ChainConfig }> = ({ chain }) => {
+  switch (chain.id) {
+    case 1: // Ethereum — official diamond logo
+      return (
+        <svg className="w-4 h-4 md:w-5 md:h-5" viewBox="0 0 24 24" fill="none">
+          <path d="M12 2L5 12.4l7 3.9 7-3.9z" fill="#8199f5"/>
+          <path d="M5 12.4l7 3.9 7-3.9L12 2z" fill="#627EEA"/>
+          <path d="M12 18.1L5 14.2l7 7.8z" fill="#8199f5"/>
+          <path d="M19 14.2l-7 7.8V18.1z" fill="#627EEA" opacity="0.7"/>
+          <path d="M12 16.3l7-3.9-7-3.2z" fill="#627EEA" opacity="0.2"/>
+          <path d="M5 12.4l7 3.9V9.2z" fill="#8199f5" opacity="0.3"/>
+        </svg>
+      );
+    case 56: // BNB Chain — official logo from cryptologos.cc
+      return (
+        <svg className="w-4 h-4 md:w-5 md:h-5" viewBox="0 0 2496 2496" fill="none">
+          <path fillRule="evenodd" clipRule="evenodd" fill="#F0B90B" d="M1248,0c689.3,0,1248,558.7,1248,1248s-558.7,1248-1248,1248S0,1937.3,0,1248S558.7,0,1248,0L1248,0z"/>
+          <path fill="#FFFFFF" d="M685.9,1248l0.9,330l280.4,165v193.2l-444.5-260.7v-524L685.9,1248L685.9,1248z M685.9,918v192.3l-163.3-96.6V821.4l163.3-96.6l164.1,96.6L685.9,918L685.9,918z M1084.3,821.4l163.3-96.6l164.1,96.6L1247.6,918L1084.3,821.4L1084.3,821.4z"/>
+          <path fill="#FFFFFF" d="M803.9,1509.6v-193.2l163.3,96.6v192.3L803.9,1509.6L803.9,1509.6z M1084.3,1812.2l163.3,96.6l164.1-96.6v192.3l-164.1,96.6l-163.3-96.6V1812.2L1084.3,1812.2z M1645.9,821.4l163.3-96.6l164.1,96.6v192.3l-164.1,96.6V918L1645.9,821.4L1645.9,821.4L1645.9,821.4z M1809.2,1578l0.9-330l163.3-96.6v524l-444.5,260.7v-193.2L1809.2,1578L1809.2,1578L1809.2,1578z"/>
+          <polygon fill="#FFFFFF" points="1692.1,1509.6 1528.8,1605.3 1528.8,1413 1692.1,1316.4 1692.1,1509.6"/>
+          <path fill="#FFFFFF" d="M1692.1,986.4l0.9,193.2l-281.2,165v330.8l-163.3,95.7l-163.3-95.7v-330.8l-281.2-165V986.4L968,889.8l279.5,165.8l281.2-165.8l164.1,96.6H1692.1L1692.1,986.4z M803.9,656.5l443.7-261.6l444.5,261.6l-163.3,96.6l-281.2-165.8L967.2,753.1L803.9,656.5L803.9,656.5z"/>
+        </svg>
+      );
+    case 8453: // Base — official blue circle + white B arc
+      return (
+        <svg className="w-4 h-4 md:w-5 md:h-5" viewBox="0 0 111 111" fill="none">
+          <circle cx="55.5" cy="55.5" r="55.5" fill="#0052FF"/>
+          <path d="M55.73 90.12c19.18 0 34.72-15.54 34.72-34.72 0-19.18-15.54-34.72-34.72-34.72-18.1 0-33 13.84-34.58 31.53h22.87v6.37H21.15c1.58 17.69 16.48 31.54 34.58 31.54z" fill="white"/>
+        </svg>
+      );
+    case 42161: // Arbitrum One — official dark hexagon + blue A
+      return (
+        <svg className="w-4 h-4 md:w-5 md:h-5" viewBox="0 0 2500 2500" fill="none">
+          <path fill="#213147" d="M226,760v980c0,63,33,120,88,152l849,490c54,31,121,31,175,0l849-490c54-31,88-89,88-152V760c0-63-33-120-88-152l-849-490c-54-31-121-31-175,0L314,608c-54,31-87,89-87,152H226z"/>
+          <path fill="#12AAFF" d="M1435,1440l-121,332c-3,9-3,19,0,29l208,571l241-139l-289-793C1467,1422,1442,1422,1435,1440z"/>
+          <path fill="#12AAFF" d="M1678,882c-7-18-32-18-39,0l-121,332c-3,9-3,19,0,29l341,935l241-139L1678,883V882z"/>
+          <path fill="#9DCCED" d="M1250,155c6,0,12,2,17,5l918,530c11,6,17,18,17,30v1060c0,12-7,24-17,30l-918,530c-5,3-11,5-17,5s-12-2-17-5l-918-530c-11-6-17-18-17-30V719c0-12,7-24,17-30l918-530c5-3,11-5,17-5V155zM1250,0c-33,0-65,8-95,25L237,555c-59,34-95,96-95,164v1060c0,68,36,130,95,164l918,530c29,17,62,25,95,25s65-8,95-25l918-530c59-34,95-96,95-164V719c0-68-36-130-95-164L1344,25C1315,8,1282,0,1250,0z"/>
+          <polygon fill="#213147" points="642,2179 727,1947 897,2088 738,2234"/>
+          <path fill="white" d="M1172,644H939c-17,0-33,11-39,27L401,2039l241,139l550-1507c5-14-5-28-19-28H1172z"/>
+          <path fill="white" d="M1580,644h-233c-17,0-33,11-39,27L738,2233l241,139l620-1701c5-14-5-28-19-28V644z"/>
+        </svg>
+      );
+    case 137: // Polygon — official single-path POL logo
+      return (
+        <svg className="w-4 h-4 md:w-5 md:h-5" viewBox="0 0 178 161" fill="none">
+          <path fill="#8247E5" d="M66.8,54.7l-16.7-9.7L0,74.1v58l50.1,29l50.1-29V41.9L128,25.8l27.8,16.1v32.2L128,90.2l-16.7-9.7v25.8l16.7,9.7l50.1-29V29L128,0L77.9,29v90.2l-27.8,16.1l-27.8-16.1V86.9l27.8-16.1l16.7,9.7V54.7z"/>
+        </svg>
+      );
+    case 4663: // Robinhood Chain — official logo from llamao CDN
+      return (
+        <img
+          src="https://icons.llamao.fi/icons/chains/rsz_robinhood.jpg"
+          className="w-4 h-4 md:w-5 md:h-5 rounded-sm object-contain"
+          alt="Robinhood"
+        />
+      );
+    default:
+      return <span className="font-bold text-white text-[10px] md:text-xs">{chain.ticker[0]}</span>;
+  }
+};
+
 const WalletModal: React.FC<WalletModalProps> = ({ isOpen, onClose, onConnect, loading }) => {
   const [view, setView] = useState<'main' | 'learn'>('main');
   const [selectedChain, setSelectedChain] = useState<ChainConfig>(CHAINS[0]);
@@ -168,6 +229,22 @@ const WalletModal: React.FC<WalletModalProps> = ({ isOpen, onClose, onConnect, l
             isMainstream: false, 
             check: () => !!eth?.isSafePal 
           },
+          {
+            id: 'walletconnect',
+            name: 'WalletConnect',
+            icon: (
+              <div className="w-6 h-6 md:w-8 md:h-8 rounded-lg bg-[#3b99fc]/10 flex items-center justify-center border border-[#3b99fc]/30">
+                <svg width="16" height="16" className="md:w-5 md:h-5" viewBox="0 0 300 200" fill="none" xmlns="http://www.w3.org/2000/svg">
+                  <path d="M61.4 55C112.1 7 197.9 7 248.6 55l6.9 6.7c2.8 2.7 2.8 7.2 0 9.9l-23.6 23c-1.4 1.4-3.7 1.4-5.1 0l-9.5-9.3c-35.4-34.5-92.8-34.5-128.2 0l-10.2 9.9c-1.4 1.4-3.7 1.4-5.1 0l-23.6-23c-2.8-2.7-2.8-7.2 0-9.9L61.4 55z" fill="#3b99fc"/>
+                  <path d="M109.4 116L150 156.5l40.6-40.5c1.4-1.4 3.7-1.4 5.1 0l28.7 28.7c1.4 1.4 1.4 3.7 0 5.1l-69 69c-1.4 1.4-3.7 1.4-5.1 0l-69.1-69.1c-1.4-1.4-1.4-3.7 0-5.1l28.7-28.7c1.4-1.4 3.7-1.4 5.1 0z" fill="#3b99fc"/>
+                </svg>
+              </div>
+            ),
+            downloadUrl: 'https://walletconnect.com/',
+            descriptionKey: 'wallet.desc.walletconnect',
+            isMainstream: true,
+            check: () => true,
+          },
         ];
 
         const processedWallets: WalletOption[] = ALL_WALLETS.map(w => ({ ...w, isInstalled: w.check() }));
@@ -302,8 +379,8 @@ const WalletModal: React.FC<WalletModalProps> = ({ isOpen, onClose, onConnect, l
                          : 'bg-transparent border-transparent text-slate-400 opacity-60 cursor-not-allowed grayscale'
                    }`}
                  >
-                   <div className="w-6 h-6 md:w-8 md:h-8 rounded-lg md:rounded-xl flex items-center justify-center shrink-0 shadow-inner ring-1 ring-white/5" style={{ backgroundColor: chain.active ? chain.color : '#1e293b' }}>
-                     <span className="font-bold text-white text-[10px] md:text-xs">{chain.ticker[0]}</span>
+                   <div className="w-6 h-6 md:w-8 md:h-8 rounded-lg md:rounded-xl flex items-center justify-center shrink-0 shadow-inner ring-1 ring-white/5 overflow-hidden" style={{ backgroundColor: chain.active ? `${chain.color}22` : '#1e293b' }}>
+                     <ChainLogo chain={chain} />
                    </div>
                    <div className="flex flex-col items-start min-w-0 relative z-10">
                      <span className="text-xs md:text-sm font-bold truncate">{chain.name}</span>

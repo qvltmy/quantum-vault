@@ -11,6 +11,7 @@
   "dependencies": {
     "@noble/hashes": "^2.0.1",
     "@noble/post-quantum": "^0.7.1",
+    "@walletconnect/ethereum-provider": "^2.26.0",
     "ethers": "^6.16.0",
     "lucide-react": "^0.561.0",
     "react": "^19.2.3",

@@ -44,6 +44,8 @@ const getProviderObject = (type: string | null): any => {
       return window.imToken?.ethereum || (eth?.isImToken ? eth : undefined);
     case 'coin98':
       return window.coin98?.provider || (eth?.isCoin98 ? eth : undefined);
+    case 'walletconnect':
+      return _wcProvider || null;
     case 'metamask':
       // Just return eth, WalletModal checks verify if it is truly MetaMask or we just accept the "injected" one
       return eth;
@@ -55,6 +57,10 @@ const getProviderObject = (type: string | null): any => {
       return eth;
   }
 };
+
+// ── WalletConnect v2 provider singleton ───────────────────────────────────────
+// Stored at module level so getProviderObject() can return it after connect.
+let _wcProvider: any = null;
 
 const VAULT_ABI = [
   "function authorizedAccount() view returns (address)",
@@ -119,11 +125,13 @@ const STORAGE_LAST_VIEW = 'quantum_last_view';
 const STORAGE_CUSTOM_TOKENS = 'quantum_custom_tokens';
 const STORAGE_VAULTS_KEY    = 'quantum_vault_list';   // JSON array of account addresses
 const STORAGE_KEYGEN_PREFIX = 'quantum_keygen_';      // per-vault WOTS+ generation counter
+const STORAGE_DEMO_KEY      = 'quantum_demo_mode';    // persists demo mode across refresh
 
 // ── Demo vault (view-only, no wallet required) ────────────────────────────────
-const DEMO_VAULT_ADDR   = '0x19e1F8515d51375764cddac83B66dFb299e6898D';
-const DEMO_ACCOUNT_ADDR = '0x05395A5Ae7B25c70DEBF91c9F461135d184c9FEE';
-const DEMO_RPC          = 'https://ethereum.publicnode.com';
+const DEMO_VAULT_ADDR   = '0xC7c0eE115e37BD1626590196776F61D00e71772b';
+const DEMO_ACCOUNT_ADDR = '0xb2a05c3603e3b8bc478987656aaa3c703b752d50';
+const DEMO_RPC          = 'https://rpc.mainnet.chain.robinhood.com';
+const DEMO_CHAIN_ID     = 4663n;
 
 // ── WOTS+ generation helpers ─────────────────────────────────────────────────
 // Each vault tracks which generation of the WOTS+ tree is currently active.
@@ -143,8 +151,14 @@ const setKeyGeneration = (accAddr: string, gen: number) => {
 
 function App() {
   const [user, setUser] = useState<UserState>({ address: null, nativeBalance: null, isConnected: false, chainId: 0n });
+  const isConnectingRef = React.useRef(false);
+  const isRestoringRef = React.useRef(true); // true during initial auto-connect, suppresses spurious accountsChanged disconnect
   const [accountAddress, setAccountAddress] = useState<string | null>(localStorage.getItem(STORAGE_VAULT_KEY) || null);
-  const [vaultAddress, setVaultAddress] = useState<string | null>(null);
+  const [vaultAddress, setVaultAddress] = useState<string | null>(() => {
+    // Restore demo vault address on refresh
+    if (localStorage.getItem(STORAGE_DEMO_KEY) === '1') return DEMO_VAULT_ADDR;
+    return null;
+  });
   const [vaultState, setVaultState] = useState<VaultState | null>(null);
   
   // Multi-vault: list of all account addresses for connected wallet + chain-fetched list
@@ -152,7 +166,7 @@ function App() {
     try { return JSON.parse(localStorage.getItem(STORAGE_VAULTS_KEY) || '[]'); } catch { return []; }
   });
   const [isFetchingVaults, setIsFetchingVaults] = useState(false);
-  const [isDemoMode, setIsDemoMode] = useState(false);
+  const [isDemoMode, setIsDemoMode] = useState(() => localStorage.getItem(STORAGE_DEMO_KEY) === '1');
   
   // Load vault address from account — re-runs when wallet connects or chain changes.
   // user.chainId MUST be in deps; without it this is a stale closure that runs
@@ -160,6 +174,8 @@ function App() {
   useEffect(() => {
     const loadVaultAddress = async () => {
       if (!accountAddress) return;
+      // Skip in demo mode — vault address already set from known constant
+      if (isDemoMode) return;
       // Don't query until wallet is connected (chainId = 0n means not yet connected)
       if (!user.isConnected || user.chainId === 0n) return;
       try {
@@ -390,15 +406,85 @@ function App() {
 
   const connectWallet = async (walletType: string = 'injected', targetChainId: number) => {
     localStorage.setItem(STORAGE_WALLET_TYPE, walletType);
-    // Auth cache is address-scoped: verifySignature() skips signing if same wallet
-    // already has a stored sig. Only clears on disconnect or address change.
-    // Allow a small delay for state propagation or provider injection
+    // Allow a small delay for provider injection on first load
     await new Promise(r => setTimeout(r, 50));
-    
+
+    // ── WalletConnect v2 special path ────────────────────────────────────────
+    if (walletType === 'walletconnect') {
+      try {
+        setLoading(true);
+        setShowWalletModal(false);
+        isConnectingRef.current = true;
+
+        const { EthereumProvider } = await import('@walletconnect/ethereum-provider');
+        const chainIds = CHAINS.filter(c => c.active).map(c => c.id);
+
+        // Disconnect any existing WC session before opening a new one
+        if (_wcProvider) {
+          try { await _wcProvider.disconnect(); } catch {}
+          _wcProvider = null;
+        }
+
+        const wcProvider = await EthereumProvider.init({
+          projectId: '9460aa10bf3fd1af3911e57b8dfcda82',
+          chains: [targetChainId],
+          optionalChains: chainIds.filter(id => id !== targetChainId) as any,
+          showQrModal: true,
+          qrModalOptions: { themeMode: 'dark' },
+          metadata: {
+            name: 'QuantumVault',
+            description: 'Post-Quantum Secure Asset Vault',
+            url: window.location.origin,
+            icons: [`${window.location.origin}/favicon.ico`],
+          },
+        });
+
+        await wcProvider.connect({ chains: [targetChainId] });
+        _wcProvider = wcProvider;
+
+        const accounts: string[] = wcProvider.accounts;
+        const address = accounts[0];
+
+        const { ethers: _ethers } = await import('ethers');
+        const provider = new _ethers.BrowserProvider(wcProvider as any);
+        const signer = await provider.getSigner();
+
+        const isVerified = await verifySignature(signer, address);
+        if (!isVerified) { setLoading(false); isConnectingRef.current = false; return; }
+
+        const [bal, network] = await Promise.all([
+          provider.getBalance(address),
+          provider.getNetwork(),
+        ]);
+        setUser({ address, nativeBalance: bal, isConnected: true, chainId: network.chainId });
+
+        // Listen for WC-specific events
+        wcProvider.on('accountsChanged', (accs: string[]) => {
+          if (accs.length === 0) disconnectWallet();
+          else disconnectWallet();
+        });
+        wcProvider.on('disconnect', () => disconnectWallet());
+
+        showToast(t('toast.connect_success'), 'success');
+        fetchUserVaults(address);
+      } catch (e: any) {
+        console.error(e);
+        const msg = getFriendlyError(e);
+        if (msg !== t('err.user_reject') && !String(e?.message).toLowerCase().includes('user rejected')) {
+          showToast(e.message || t('toast.connect_fail'), 'error');
+        }
+        localStorage.removeItem(STORAGE_AUTH_KEY);
+        _wcProvider = null;
+      } finally {
+        setLoading(false);
+        isConnectingRef.current = false;
+      }
+      return;
+    }
+
     let eth = getProviderObject(walletType);
 
     if (!eth) {
-       // Fallback logic: If specific provider not found, try generic ethereum
        if (walletType !== 'injected' && window.ethereum) {
           console.warn(`Specific provider for ${walletType} not found, falling back to window.ethereum`);
           eth = window.ethereum;
@@ -407,60 +493,72 @@ function App() {
        }
     }
 
+    isConnectingRef.current = true;
     try {
       setLoading(true);
       setShowWalletModal(false);
-      const provider = new ethers.BrowserProvider(eth);
-      
-      // Safety check: detection of network can fail with legacy providers returning invalid values
-      let network;
-      try {
-        network = await provider.getNetwork();
-      } catch (networkError) {
-        console.warn("Failed to detect network, forcing simple connection or attempting switch", networkError);
-        // If getNetwork fails, we might still be able to switch if we assume we are not on the right chain
+
+      // Step 1: request accounts first so wallet is unlocked before we try switching chain
+      const accounts = await eth.request({ method: "eth_requestAccounts" });
+      const address = accounts[0];
+
+      // Step 2: get current chain, switch if needed
+      const currentChainHex: string = await eth.request({ method: "eth_chainId" });
+      const currentChainId = parseInt(currentChainHex, 16);
+      if (currentChainId !== targetChainId) {
         const chainHex = "0x" + targetChainId.toString(16);
         try {
-           await eth.request({ method: "wallet_switchEthereumChain", params: [{ chainId: chainHex }] });
-           // Re-instantiate provider after switch as some legacy providers require it
-           const newProvider = new ethers.BrowserProvider(eth);
-           network = await newProvider.getNetwork();
-        } catch(e) {
-           console.error("Network Switch Failed or Provider Unusable", e);
-           throw new Error("Wallet provider returned invalid network data. Please ensure your wallet is unlocked and try again.");
-        }
-      }
-
-      if (network && Number(network.chainId) !== targetChainId) {
-        try {
-          const chainHex = "0x" + targetChainId.toString(16);
           await eth.request({ method: "wallet_switchEthereumChain", params: [{ chainId: chainHex }] });
         } catch (switchError: any) {
-          if (switchError.code === 4902) {
-             showToast(t('toast.add_chain_first'), "error");
-          } else if (getFriendlyError(switchError) === t('err.user_reject')) {
-             setLoading(false);
-             return;
+          if (switchError.code === 4902 || switchError.code === -32603) {
+            // Chain not added — try adding it
+            const chainCfg = CHAINS.find(c => c.id === targetChainId);
+            if (chainCfg) {
+              try {
+                await eth.request({
+                  method: "wallet_addEthereumChain",
+                  params: [{
+                    chainId: chainHex,
+                    chainName: chainCfg.label ?? chainCfg.name,
+                    rpcUrls: chainCfg.rpcUrls ?? [chainCfg.rpc],
+                    nativeCurrency: chainCfg.nativeCurrency ?? { name: chainCfg.ticker, symbol: chainCfg.ticker, decimals: 18 },
+                    blockExplorerUrls: [chainCfg.explorer],
+                  }],
+                });
+              } catch (addErr: any) {
+                if (addErr.code === 4001) { setLoading(false); return; }
+                throw addErr;
+              }
+            } else {
+              showToast(t('toast.add_chain_first'), "error");
+              setLoading(false);
+              return;
+            }
+          } else if (switchError.code === 4001) {
+            setLoading(false);
+            return;
           } else {
-             console.error(switchError);
-             throw switchError;
+            throw switchError;
           }
         }
-      }
-      
-      const accounts = await provider.send("eth_requestAccounts", []);
-      const address = accounts[0];
-      const signer = await provider.getSigner();
-      
-      const isVerified = await verifySignature(signer, address);
-      if (!isVerified) { 
-        setLoading(false); 
-        return; 
+        // Brief pause for wallet to settle after chain switch
+        await new Promise(r => setTimeout(r, 300));
       }
 
-      const bal = await provider.getBalance(address);
-      const chainId = (await provider.getNetwork()).chainId;
-      setUser({ address, nativeBalance: bal, isConnected: true, chainId });
+      // Step 3: build fresh provider after any chain switch
+      const provider = new ethers.BrowserProvider(eth);
+      const signer = await provider.getSigner();
+
+      // Step 4: signature auth (skipped if same address already signed this session)
+      const isVerified = await verifySignature(signer, address);
+      if (!isVerified) { setLoading(false); return; }
+
+      // Step 5: read balance + chainId from fresh provider
+      const [bal, network] = await Promise.all([
+        provider.getBalance(address),
+        provider.getNetwork(),
+      ]);
+      setUser({ address, nativeBalance: bal, isConnected: true, chainId: network.chainId });
       showToast(t('toast.connect_success'), "success");
       fetchUserVaults(address);
     } catch (e: any) {
@@ -472,6 +570,7 @@ function App() {
       localStorage.removeItem(STORAGE_AUTH_KEY);
     } finally {
       setLoading(false);
+      isConnectingRef.current = false;
     }
   };
 
@@ -479,9 +578,11 @@ function App() {
     setUser({ address: null, nativeBalance: null, isConnected: false, chainId: 0n });
     setVaultState(null);
     setVaultAddress(null);
+    setIsDemoMode(false);
     setIsRestoring(false);
     localStorage.removeItem(STORAGE_VAULT_KEY);
     localStorage.removeItem(STORAGE_AUTH_KEY);
+    localStorage.removeItem(STORAGE_DEMO_KEY);
     handleNavigate('landing');
     showToast(t('toast.disconnect'), "info");
   };
@@ -564,22 +665,24 @@ function App() {
 
   // Robust Disconnection Logic
   useEffect(() => {
-    checkAutoConnect();
+    checkAutoConnect().finally(() => { isRestoringRef.current = false; });
     const eth = getEthereumObject();
     if (eth) {
       const handleAccountsChanged = (accounts: string[]) => {
+          // Suppress during initial restore — wallet emits accountsChanged before
+          // checkAutoConnect finishes, causing a false disconnect toast on every refresh.
+          if (isRestoringRef.current) return;
           if (accounts.length === 0) {
-              // User disconnected via wallet interface
               disconnectWallet();
           } else {
-              // User switched account - good practice to re-auth or disconnect
+              // Account switched — force re-auth
               disconnectWallet();
           }
       };
 
       if (eth.on) {
           eth.on('accountsChanged', handleAccountsChanged);
-          eth.on('chainChanged', () => window.location.reload());
+          eth.on('chainChanged', () => { if (!isConnectingRef.current) window.location.reload(); });
       }
       
       return () => {
@@ -591,10 +694,14 @@ function App() {
   }, [checkAutoConnect, getEthereumObject]);
 
   // ── Demo vault loader ────────────────────────────────────────────────────────
-  const handleLoadDemoVault = () => {
+  const handleLoadDemoVault = async () => {
+    // Use known addresses directly — vaultToAccount reverts on Robinhood chain
     setAccountAddress(DEMO_ACCOUNT_ADDR);
     setVaultAddress(DEMO_VAULT_ADDR);
     setIsDemoMode(true);
+    localStorage.setItem(STORAGE_DEMO_KEY, '1');
+    // Also store account so loadVaultAddress effect doesn't clobber it
+    localStorage.setItem(STORAGE_VAULT_KEY, DEMO_ACCOUNT_ADDR);
     handleNavigate('dashboard');
   };
 
@@ -604,26 +711,45 @@ function App() {
     if (isDemoMode && vaultAddress) {
       try {
         const provider = new ethers.JsonRpcProvider(DEMO_RPC);
+        const chainId = DEMO_CHAIN_ID;
+
         const pBal = provider.getBalance(vaultAddress);
-        const accountContract = new ethers.Contract(DEMO_ACCOUNT_ADDR, ACCOUNT_ABI, provider);
+        const accountContract = new ethers.Contract(accountAddress!, ACCOUNT_ABI, provider);
         const pPrimaryMerkleRoot = accountContract.primaryMerkleRoot();
         const [bal, primaryMerkleRoot] = await Promise.all([pBal, pPrimaryMerkleRoot]);
-        const chainTokens = getChainTokens(1n);
-        const tokenPromises = chainTokens.slice(1).map(async (t) => {
+
+        const storedCustomTokens: string[] = JSON.parse(localStorage.getItem(STORAGE_CUSTOM_TOKENS) || '[]');
+        const chainTokens = getChainTokens(chainId);
+        const tokensToCheck = [...chainTokens];
+        storedCustomTokens.forEach(addr => {
+          if (!tokensToCheck.find(t => t.address.toLowerCase() === addr.toLowerCase())) {
+            tokensToCheck.push({ symbol: 'UNKNOWN', address: addr, decimals: 18 });
+          }
+        });
+
+        const tokenPromises = tokensToCheck.map(async (t) => {
           try {
             const tokenContract = new ethers.Contract(t.address, ERC20_ABI, provider);
             const tBal = await tokenContract.balanceOf(vaultAddress);
-            if (tBal > 0n) return { ...t, balance: tBal };
+            if (t.symbol === 'UNKNOWN') {
+              try {
+                const [symbol, decimals] = await Promise.all([tokenContract.symbol(), tokenContract.decimals()]);
+                return { ...t, symbol, decimals, balance: tBal };
+              } catch { return { ...t, symbol: 'Custom', balance: tBal }; }
+            }
+            // In demo mode always show all chain tokens (even 0-balance ones)
+            return { ...t, balance: tBal };
           } catch {}
           return null;
         });
         const results = await Promise.all(tokenPromises);
         const tokenInfos: TokenInfo[] = results.filter(Boolean) as TokenInfo[];
+
         setVaultState({
           vaultAddress,
-          accountAddress: DEMO_ACCOUNT_ADDR,
+          accountAddress: accountAddress!,
           nativeBalance: bal,
-          chainId: 1n,
+          chainId,
           primaryMerkleRoot,
           isPaused: false,
           vaultTokens: tokenInfos,
@@ -1485,7 +1611,7 @@ function App() {
               isConnected={user.isConnected}
               onConnect={() => setShowWalletModal(true)}
               loading={loading}
-              activeVaultAddress={vaultAddress}
+              activeVaultAddress={isDemoMode ? null : vaultAddress}
               onNavigateToDashboard={() => handleNavigate('dashboard')}
               onExitVault={handleExitVault}
               myVaults={myVaults}

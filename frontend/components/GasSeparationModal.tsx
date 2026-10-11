@@ -47,14 +47,13 @@ const GasSeparationModal: React.FC<GasSeparationModalProps> = ({
     authorizedWallets.length === 0 ||
     authorizedWallets.some(a => a.toLowerCase() === addr.toLowerCase());
 
-  // Detect current wallet address
+  // Detect current wallet address — use eth_accounts (no prompt)
   const detectCurrentWallet = async () => {
     try {
       const eth = (window as any).ethereum;
       if (!eth) return;
-      const provider = new ethers.BrowserProvider(eth);
-      const signer   = await provider.getSigner();
-      setCurrentAddr(await signer.getAddress());
+      const accounts: string[] = await eth.request({ method: 'eth_accounts' });
+      if (accounts.length > 0) setCurrentAddr(ethers.getAddress(accounts[0]));
     } catch {}
   };
 

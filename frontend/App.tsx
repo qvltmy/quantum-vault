@@ -153,6 +153,7 @@ function App() {
   const [user, setUser] = useState<UserState>({ address: null, nativeBalance: null, isConnected: false, chainId: 0n });
   const isConnectingRef = React.useRef(false);
   const isRestoringRef = React.useRef(true); // true during initial auto-connect, suppresses spurious accountsChanged disconnect
+  const isGasSwitchingRef = React.useRef(false); // true while GasSeparationModal is open — suppress disconnect on wallet switch
   const [accountAddress, setAccountAddress] = useState<string | null>(localStorage.getItem(STORAGE_VAULT_KEY) || null);
   const [vaultAddress, setVaultAddress] = useState<string | null>(() => {
     // Restore demo vault address on refresh
@@ -691,6 +692,15 @@ function App() {
           // Suppress during initial restore — wallet emits accountsChanged before
           // checkAutoConnect finishes, causing a false disconnect toast on every refresh.
           if (isRestoringRef.current) return;
+          // Suppress during gas-separation wallet switch — user is switching to a
+          // gas-paying wallet mid-operation; do NOT disconnect from the vault.
+          if (isGasSwitchingRef.current) {
+            if (accounts.length > 0) {
+              // Silently update the connected address so getSigner() returns the new wallet
+              setUser(u => ({ ...u, address: accounts[0] }));
+            }
+            return;
+          }
           if (accounts.length === 0) {
               disconnectWallet();
           } else {
@@ -1356,6 +1366,7 @@ function App() {
         let knownAdmins: string[] = [];
         try { knownAdmins = await accountContract.getWalletAdmins(); } catch {}
 
+        isGasSwitchingRef.current = true;
         walletSig = await new Promise<string>((resolve, reject) => {
           setGasSepModal({
             isOpen: true,
@@ -1364,15 +1375,13 @@ function App() {
             isAlreadyAuthorized: isCurrentWalletAdmin,
             nativeTicker: CHAINS.find(c => BigInt(c.id) === user.chainId)?.ticker ?? 'ETH',
             onSigned: (sig) => {
+              isGasSwitchingRef.current = false;
               setGasSepModal(prev => ({ ...prev, isOpen: false }));
               resolve(sig);
             },
           });
-          // If user cancels, the modal calls onCancel which we expose via the
-          // cancel button's onClick. We hook it through state by watching a
-          // dedicated cancel flag — simplest: reject when modal closes without sig.
-          // We store the reject so the cancel button can call it.
           (window as any).__gasSepReject = () => {
+            isGasSwitchingRef.current = false;
             setGasSepModal(prev => ({ ...prev, isOpen: false }));
             reject(new Error('Signature cancelled. Operation aborted.'));
           };
@@ -1562,6 +1571,7 @@ function App() {
       } else {
         let knownAdmins: string[] = [];
         try { knownAdmins = await accountContract.getWalletAdmins(); } catch {}
+        isGasSwitchingRef.current = true;
         walletSigRotate = await new Promise<string>((resolve, reject) => {
           setGasSepModal({
             isOpen: true,
@@ -1570,11 +1580,13 @@ function App() {
             isAlreadyAuthorized: isWalletAdminAddrRotate,
             nativeTicker: CHAINS.find(c => BigInt(c.id) === user.chainId)?.ticker ?? 'ETH',
             onSigned: (sig) => {
+              isGasSwitchingRef.current = false;
               setGasSepModal(prev => ({ ...prev, isOpen: false }));
               resolve(sig);
             },
           });
           (window as any).__gasSepReject = () => {
+            isGasSwitchingRef.current = false;
             setGasSepModal(prev => ({ ...prev, isOpen: false }));
             reject(new Error('Signature cancelled.'));
           };

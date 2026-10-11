@@ -288,8 +288,9 @@ function App() {
     isOpen: boolean;
     opHash: string;
     authorizedWallets: string[];
+    isAlreadyAuthorized: boolean;  // current wallet IS admin but lacks gas
     onSigned: (sig: string) => void;
-  }>({ isOpen: false, opHash: '', authorizedWallets: [], onSigned: () => {} });
+  }>({ isOpen: false, opHash: '', authorizedWallets: [], isAlreadyAuthorized: false, onSigned: () => {} });
 
   // New: Track last success time to auto-clear inputs
   const [lastSuccessTime, setLastSuccessTime] = useState(0);
@@ -1359,6 +1360,7 @@ function App() {
             isOpen: true,
             opHash,
             authorizedWallets: knownAdmins,
+            isAlreadyAuthorized: isCurrentWalletAdmin,
             onSigned: (sig) => {
               setGasSepModal(prev => ({ ...prev, isOpen: false }));
               resolve(sig);
@@ -1563,6 +1565,7 @@ function App() {
             isOpen: true,
             opHash,
             authorizedWallets: knownAdmins,
+            isAlreadyAuthorized: isWalletAdminAddrRotate,
             onSigned: (sig) => {
               setGasSepModal(prev => ({ ...prev, isOpen: false }));
               resolve(sig);
@@ -1782,6 +1785,7 @@ function App() {
         isOpen={gasSepModal.isOpen}
         opHash={gasSepModal.opHash}
         authorizedWallets={gasSepModal.authorizedWallets}
+        isAlreadyAuthorized={gasSepModal.isAlreadyAuthorized}
         onSuccess={(sig) => gasSepModal.onSigned(sig)}
         onCancel={() => {
           const reject = (window as any).__gasSepReject;

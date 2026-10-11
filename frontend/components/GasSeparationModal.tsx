@@ -10,6 +10,13 @@ interface GasSeparationModalProps {
   opHash: string;
   /** Known wallet admins for display (address[]) */
   authorizedWallets: string[];
+  /**
+   * true  → current wallet IS an authorized admin but has insufficient gas.
+   *         User can sign immediately with current wallet, then switch to a gas wallet.
+   * false → current wallet is NOT an authorized admin.
+   *         User must first switch to an authorized wallet to sign.
+   */
+  isAlreadyAuthorized: boolean;
   onSuccess: (walletSig: string) => void;
   onCancel: () => void;
 }
@@ -22,14 +29,15 @@ const GasSeparationModal: React.FC<GasSeparationModalProps> = ({
   isOpen,
   opHash,
   authorizedWallets,
+  isAlreadyAuthorized,
   onSuccess,
   onCancel,
 }) => {
-  const [phase, setPhase]         = useState<Phase>('sign');
-  const [walletSig, setWalletSig] = useState('');
+  const [phase, setPhase]           = useState<Phase>('sign');
+  const [walletSig, setWalletSig]   = useState('');
   const [signerAddr, setSignerAddr] = useState('');
   const [currentAddr, setCurrentAddr] = useState('');
-  const [error, setError]         = useState('');
+  const [error, setError]           = useState('');
   const listenerRef = useRef<((accounts: string[]) => void) | null>(null);
 
   const isAuthorized = (addr: string) =>
@@ -86,7 +94,7 @@ const GasSeparationModal: React.FC<GasSeparationModalProps> = ({
     return () => unsubscribeAccountChange();
   }, [isOpen]);
 
-  // Force MetaMask to show account picker — user selects wallet directly
+  // Force MetaMask to show account picker
   const handleSwitchWallet = async () => {
     try {
       const eth = (window as any).ethereum;
@@ -95,7 +103,6 @@ const GasSeparationModal: React.FC<GasSeparationModalProps> = ({
         method: 'wallet_requestPermissions',
         params: [{ eth_accounts: {} }],
       });
-      // After selection, detect the newly connected wallet
       await detectCurrentWallet();
     } catch {
       // user cancelled picker — silently ignore
@@ -115,12 +122,12 @@ const GasSeparationModal: React.FC<GasSeparationModalProps> = ({
       const addr   = await signer.getAddress();
 
       // Verify it's actually an authorized wallet
-      const isAdmin =
+      const adminCheck =
         authorizedWallets.length === 0
           ? true
           : authorizedWallets.some(a => a.toLowerCase() === addr.toLowerCase());
 
-      if (!isAdmin) {
+      if (!adminCheck) {
         throw new Error(
           `${short(addr)} is not an authorized admin.\n` +
           `Please switch MetaMask to one of the authorized wallets listed above, then try again.`
@@ -133,7 +140,6 @@ const GasSeparationModal: React.FC<GasSeparationModalProps> = ({
       setWalletSig(sig);
       setSignerAddr(recovered);
       setPhase('signed');
-      // re-detect after signing (user might have already switched)
       await detectCurrentWallet();
     } catch (e: any) {
       const code = e?.code ?? e?.info?.error?.code;
@@ -152,12 +158,26 @@ const GasSeparationModal: React.FC<GasSeparationModalProps> = ({
 
   if (!isOpen) return null;
 
-  // In signed phase: is current wallet the gas wallet (different from signer)?
+  // After signing: ready to submit when current wallet has switched to a gas-paying wallet
+  // (different from the signer, since the signer had no gas — that's why we're here)
   const gasWalletReady =
     phase === 'signed' &&
-    currentAddr &&
-    signerAddr &&
+    !!currentAddr &&
+    !!signerAddr &&
     currentAddr.toLowerCase() !== signerAddr.toLowerCase();
+
+  // Step 1 labels
+  const step1Title = phase === 'signed'
+    ? 'Signed ✓'
+    : isAlreadyAuthorized
+      ? 'Sign with your current authorized wallet'
+      : 'Switch to authorized wallet → Sign';
+
+  const step1Desc = phase === 'signed'
+    ? `Signed by ${short(signerAddr)}`
+    : isAlreadyAuthorized
+      ? 'Your connected wallet is authorized. Click the button below to sign — no gas fee required.'
+      : 'In MetaMask, switch to an authorized wallet (no BNB needed). Then click the button below — only a signature is requested, no gas fee.';
 
   return (
     <div className="fixed inset-0 z-[120] flex items-center justify-center p-4 sm:p-6 animate-fade-in">
@@ -194,16 +214,20 @@ const GasSeparationModal: React.FC<GasSeparationModalProps> = ({
               <div className={`w-2 h-2 rounded-full shrink-0 transition-colors ${
                 phase === 'signed'
                   ? gasWalletReady ? 'bg-teal-400 shadow-[0_0_6px_#34d399]' : 'bg-amber-400'
-                  : isAuthorized(currentAddr) ? 'bg-teal-400' : 'bg-amber-400'
+                  : isAlreadyAuthorized
+                    ? 'bg-teal-400 shadow-[0_0_6px_#34d399]'
+                    : isAuthorized(currentAddr) ? 'bg-teal-400' : 'bg-amber-400'
               }`} />
               <div className="flex-1 min-w-0">
                 <div className="text-[10px] text-slate-400 uppercase tracking-widest mb-0.5">Connected wallet</div>
                 <div className="text-xs font-mono text-slate-300 truncate">{currentAddr}</div>
               </div>
               {phase !== 'signed' && (
-                isAuthorized(currentAddr)
+                isAlreadyAuthorized
                   ? <span className="text-[10px] text-teal-400 font-bold shrink-0">✓ Authorized</span>
-                  : <span className="text-[10px] text-amber-400 font-bold shrink-0">Not authorized</span>
+                  : isAuthorized(currentAddr)
+                    ? <span className="text-[10px] text-teal-400 font-bold shrink-0">✓ Authorized</span>
+                    : <span className="text-[10px] text-amber-400 font-bold shrink-0">Not authorized</span>
               )}
               {phase === 'signed' && (
                 gasWalletReady
@@ -227,14 +251,8 @@ const GasSeparationModal: React.FC<GasSeparationModalProps> = ({
                 {phase === 'signed' ? <CheckCircle2 size={14} /> : '1'}
               </div>
               <div>
-                <div className="text-xs font-bold text-white mb-0.5">
-                  {phase === 'signed' ? 'Signed ✓' : 'Switch to authorized wallet → Sign'}
-                </div>
-                <div className="text-[11px] text-slate-400 leading-relaxed">
-                  {phase === 'signed'
-                    ? `Signed by ${short(signerAddr)}`
-                    : 'In MetaMask, switch to an authorized wallet (no BNB needed). Then click the button below — only a signature is requested, no gas fee.'}
-                </div>
+                <div className="text-xs font-bold text-white mb-0.5">{step1Title}</div>
+                <div className="text-[11px] text-slate-400 leading-relaxed">{step1Desc}</div>
               </div>
             </div>
 
@@ -265,15 +283,15 @@ const GasSeparationModal: React.FC<GasSeparationModalProps> = ({
                   {phase === 'signed'
                     ? gasWalletReady
                       ? `Using ${short(currentAddr)} to pay gas. Click Continue to submit.`
-                      : 'Switch MetaMask to any wallet that has BNB. The wallet indicator above will turn green.'
+                      : 'Switch MetaMask to any wallet that has BNB to pay gas.'
                     : 'After signing, switch to any wallet with BNB to pay gas and submit the transaction.'}
                 </div>
               </div>
             </div>
           </div>
 
-          {/* Authorized wallet list — only shown before signing */}
-          {authorizedWallets.length > 0 && phase !== 'signed' && (
+          {/* Authorized wallet list — only shown when not already authorized and before signing */}
+          {!isAlreadyAuthorized && authorizedWallets.length > 0 && phase !== 'signed' && (
             <div className="mb-5 p-3 rounded-xl bg-black/30 border border-cyan-100/[0.11]">
               <div className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-2 flex items-center gap-1.5">
                 <Wallet size={10} /> Authorized Wallets
@@ -301,12 +319,15 @@ const GasSeparationModal: React.FC<GasSeparationModalProps> = ({
           {/* ── Phase: sign / signing ─────────────────────────── */}
           {(phase === 'sign' || phase === 'signing') && (
             <div className="space-y-3">
-              <button
-                onClick={handleSwitchWallet}
-                className="w-full py-3 rounded-xl bg-[#0c1d30]/80 hover:bg-cyan-100/[0.07] border border-cyan-100/[0.16] text-slate-300 text-xs font-bold flex items-center justify-center gap-2 transition-all"
-              >
-                <RefreshCw size={14} /> Switch to Authorized Wallet
-              </button>
+              {/* Only show "Switch wallet" button when not already authorized */}
+              {!isAlreadyAuthorized && (
+                <button
+                  onClick={handleSwitchWallet}
+                  className="w-full py-3 rounded-xl bg-[#0c1d30]/80 hover:bg-cyan-100/[0.07] border border-cyan-100/[0.16] text-slate-300 text-xs font-bold flex items-center justify-center gap-2 transition-all"
+                >
+                  <RefreshCw size={14} /> Switch to Authorized Wallet
+                </button>
+              )}
               <button
                 onClick={handleSign}
                 disabled={phase === 'signing'}
@@ -315,7 +336,7 @@ const GasSeparationModal: React.FC<GasSeparationModalProps> = ({
                 {phase === 'signing' ? (
                   <><Loader2 size={18} className="animate-spin" /> Waiting for signature…</>
                 ) : (
-                  <><Wallet size={18} /> Sign with Authorized Wallet</>
+                  <><Wallet size={18} /> Sign with {isAlreadyAuthorized ? 'Current' : 'Authorized'} Wallet</>
                 )}
               </button>
               <button
@@ -352,7 +373,7 @@ const GasSeparationModal: React.FC<GasSeparationModalProps> = ({
           {/* ── Phase: signed ────────────────────────────────── */}
           {phase === 'signed' && (
             <div className="space-y-3">
-              {/* If still on same wallet as signer, prompt to switch to gas wallet */}
+              {/* Prompt to switch to gas wallet */}
               {!gasWalletReady && (
                 <button
                   onClick={handleSwitchWallet}

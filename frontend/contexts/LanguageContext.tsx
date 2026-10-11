@@ -45,10 +45,10 @@ const translations: Record<string, string> = {
     "nav.menu": "Menu",
     
     // Landing Page
-    "landing.tag": "WOTS+ Post-Quantum Vault · BNB Chain",
+    "landing.tag": "Post-Quantum Vault · Robinhood Chain · Multi-Chain",
     "landing.title.1": "Your Crypto Vault,",
     "landing.title.2": "Quantum-Proof.",
-    "landing.subtitle": "WOTS+ hash-based signatures replace ECDSA entirely — no elliptic-curve math, no Shor's attack surface. Password + authorized wallet dual-factor. Every withdrawal verified on-chain in pure Solidity. No trusted setup. No external verifier.",
+    "landing.subtitle": "A self-custody vault that replaces ECDSA with WOTS+ hash-based signatures — no elliptic-curve math, immune to Shor's algorithm. Dual-factor: your password derives the signing keys, your wallet authorizes each operation. Verification runs entirely on-chain in pure Solidity.",
     "landing.step1": "Connect Wallet",
     "landing.step2": "Set Vault Password",
     "landing.step3": "Deposit & Protect",
@@ -64,7 +64,7 @@ const translations: Record<string, string> = {
     "landing.tab.create": "Create Vault",
     "landing.load.title": "Access Existing Vault",
     "landing.load.desc": "Enter your Quantum Vault account address",
-    "landing.load.placeholder": "0x... (Account Address)",
+    "landing.load.placeholder": "0x... (Vault Address)",
     "landing.load.recent": "Recent",
     "landing.create.title": "Create New Vault",
     "landing.create.desc": "Deploy your personal Quantum Vault on-chain",
@@ -176,6 +176,7 @@ const translations: Record<string, string> = {
     "deposit.vault_addr.desc": "Send supported native currency or ERC-20 tokens directly to this address. No token approval is required for an inbound transfer. Verify the network and token contract first; unsupported assets may not be recoverable through the interface.",
     "deposit.select_asset": "Asset",
     "deposit.custom_input": "Contract Address",
+    "deposit.btn": "Deposit",
     "deposit.amount": "Amount",
     "deposit.balance": "Account Balance",
     "deposit.principle.title": "No Password for Deposit?",
@@ -376,7 +377,7 @@ const translations: Record<string, string> = {
     "wallet.chain_active": "Active",
     "wallet.chain_soon": "Soon",
     "wallet.multichain": "Multi-Chain",
-    "wallet.multichain_desc": "The Quantum Vault protocol is designed to be chain-agnostic. Currently deployed on BNB Smart Chain mainnet; other networks require separate factory deployments.",
+    "wallet.multichain_desc": "Quantum Vault is deployed on Robinhood Chain, Ethereum, BNB Smart Chain, Base, Arbitrum One, and Polygon — same factory address on every chain.",
 };
 
 const LanguageContext = createContext<LanguageContextType | undefined>(undefined);

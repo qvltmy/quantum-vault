@@ -4,9 +4,10 @@ export interface VaultState {
   nativeBalance: bigint;
   chainId: bigint;
   primaryMerkleRoot: string;
-  // Legacy field retained for compatibility; V2 contracts have no pause/freeze state.
   isPaused: boolean;
   vaultTokens: TokenInfo[];
+  /** True while the initial RPC fetch is in-flight; hides placeholder zeros in UI */
+  isLoading?: boolean;
 }
 
 export interface TokenInfo {

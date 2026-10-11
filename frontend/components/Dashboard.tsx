@@ -402,8 +402,9 @@ const Dashboard: React.FC<DashboardProps> = ({
     </div>
   );
 
-  const nativeBal = vaultState.nativeBalance ? parseFloat(ethers.formatEther(vaultState.nativeBalance)).toFixed(4) : "0.00";
-  const totalAssetsCount = (
+  const isLoadingData = !!vaultState.isLoading;
+  const nativeBal = isLoadingData ? '—' : (vaultState.nativeBalance ? parseFloat(ethers.formatEther(vaultState.nativeBalance)).toFixed(4) : "0.00");
+  const totalAssetsCount = isLoadingData ? '—' : (
     vaultState.vaultTokens.filter(t => (t.balance ?? 0n) > 0n).length +
     (vaultState.nativeBalance > 0n ? 1 : 0)
   ).toString();

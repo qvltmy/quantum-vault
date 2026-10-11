@@ -797,6 +797,48 @@ function App() {
     handleNavigate('dashboard');
   };
 
+  // ── Demo password verifier (no wallet required) ───────────────────────────────
+  // Derives WOTS+ tree from password, checks if merkleRoot is registered as admin
+  // on the demo account contract via public RPC. Used in place of real tx actions.
+  const executeDemoVerify = async (pw: string) => {
+    setShowPwModal(prev => ({ ...prev, isOpen: false, error: undefined }));
+    setProcessState({ isOpen: true, step: 'hashing', title: 'Verify Password', skipHashing: false });
+    try {
+      const masterSeed = await deriveArgon2Key(pw);
+      if (!masterSeed) throw new Error('Key derivation failed');
+
+      const { buildWOTSTreeAsync: bwt, deriveGenerationSeed: dgs } = await import('./services/wotsService');
+      const currentGen = getKeyGeneration(DEMO_ACCOUNT_ADDR);
+      const genSeed = dgs(masterSeed, currentGen);
+      setProcessState(prev => ({ ...prev, step: 'signing' }));
+      const tree = await bwt(genSeed);
+      const signerRoot = tree.merkleRoot;
+
+      const robinhoodNet = new ethers.Network('Robinhood', 4663);
+      const provider = new ethers.JsonRpcProvider(DEMO_RPC, robinhoodNet, { staticNetwork: robinhoodNet } as any);
+      const accountContract = new ethers.Contract(DEMO_ACCOUNT_ADDR, ACCOUNT_ABI, provider);
+      const isAdminRoot: boolean = await accountContract.isAdmin(signerRoot);
+
+      if (!isAdminRoot) {
+        throw new Error('Wrong password — the derived Merkle root is not registered as an admin on this vault.');
+      }
+      setProcessState(prev => ({ ...prev, step: 'success', successMsg: 'Password verified ✓ — Merkle root matches the demo vault.' }));
+    } catch (e: any) {
+      const msg: string = e?.message ?? '';
+      const isWrongPw =
+        msg.includes('Wrong password') ||
+        msg.includes('merkle root is not registered') ||
+        msg.includes('invalidpasswordproof') ||
+        msg.includes('InvalidPasswordProof');
+      setProcessState(prev => ({ ...prev, isOpen: false }));
+      if (isWrongPw) {
+        setShowPwModal(prev => ({ ...prev, isOpen: true, error: 'Incorrect password. Please try again.' }));
+      } else {
+        setShowPwModal(prev => ({ ...prev, isOpen: true, error: msg || 'Verification failed.' }));
+      }
+    }
+  };
+
   const refreshVault = useCallback(async (silent = false) => {
     const eth = getEthereumObject();
     // Demo mode: use a public JSON-RPC provider instead of wallet
@@ -984,9 +1026,12 @@ function App() {
   useEffect(() => {
     if (!isDemoMode && (!user.isConnected || !vaultAddress)) return;
     if (!vaultAddress) return;
-    const intervalId = setInterval(() => refreshVault(true), 10000);
+    // Fast poll (1s) until first load completes, then slow poll (10s)
+    const isInitialLoad = !vaultState || vaultState.isLoading;
+    const intervalMs = isInitialLoad ? 1000 : 10000;
+    const intervalId = setInterval(() => refreshVault(true), intervalMs);
     return () => clearInterval(intervalId);
-  }, [user.isConnected, isDemoMode, vaultAddress, refreshVault]);
+  }, [user.isConnected, isDemoMode, vaultAddress, refreshVault, vaultState]);
 
 
   const fetchUserTokenBalance = useCallback(async (tokenAddress: string): Promise<string> => {
@@ -1527,7 +1572,7 @@ function App() {
     setShowWithdrawModal(false);
     setShowPwModal({
       isOpen: true,
-      action: executeWithdraw,
+      action: isDemoMode ? executeDemoVerify : executeWithdraw,
       desc: t('modal.pw.desc')
     });
   };
@@ -1815,7 +1860,7 @@ function App() {
               onDeposit={handleInitiateDeposit}
               onInitiateWithdraw={handleInitiateWithdraw} 
               onRotateEcdsaSigner={(newPw: string, currentPw: string) => handleRotateEcdsaSigner(newPw, currentPw)}
-              onSecureAction={(desc, action) => setShowPwModal({ isOpen: true, action, desc })}
+              onSecureAction={(desc, action) => setShowPwModal({ isOpen: true, action: isDemoMode ? executeDemoVerify : action, desc })}
               onAddAdmin={handleAddAdmin}
               onRemoveAdmin={handleRemoveAdmin}
               loading={loading}

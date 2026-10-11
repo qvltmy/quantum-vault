@@ -688,7 +688,7 @@ function App() {
     checkAutoConnect().finally(() => { isRestoringRef.current = false; });
     const eth = getEthereumObject();
     if (eth) {
-      const handleAccountsChanged = (accounts: string[]) => {
+      const handleAccountsChanged = async (accounts: string[]) => {
           // Suppress during initial restore — wallet emits accountsChanged before
           // checkAutoConnect finishes, causing a false disconnect toast on every refresh.
           if (isRestoringRef.current) return;
@@ -704,8 +704,58 @@ function App() {
           if (accounts.length === 0) {
               disconnectWallet();
           } else {
-              // Account switched — force re-auth
-              disconnectWallet();
+              // Account switched — soft re-auth: preserve vault session if
+              // the new address has a stored auth token; otherwise re-sign.
+              const newAddr = accounts[0];
+              const storedAuth = localStorage.getItem(STORAGE_AUTH_KEY);
+              let authOk = false;
+              if (storedAuth) {
+                try {
+                  const { addr } = JSON.parse(storedAuth);
+                  authOk = addr.toLowerCase() === newAddr.toLowerCase();
+                } catch {
+                  localStorage.removeItem(STORAGE_AUTH_KEY);
+                }
+              }
+              if (authOk) {
+                // Same or previously-authed address — just update state + refresh
+                const eth2 = getEthereumObject();
+                if (eth2) {
+                  try {
+                    const p2 = new ethers.BrowserProvider(eth2);
+                    const [bal2, net2] = await Promise.all([
+                      p2.getBalance(newAddr),
+                      p2.getNetwork(),
+                    ]);
+                    setUser({ address: newAddr, nativeBalance: bal2, isConnected: true, chainId: net2.chainId });
+                    fetchUserVaults(newAddr, net2.chainId);
+                    showToast(`Switched to ${newAddr.slice(0,6)}…${newAddr.slice(-4)}`, 'info');
+                  } catch { disconnectWallet(); }
+                }
+              } else {
+                // New address, no stored auth — request signature
+                localStorage.removeItem(STORAGE_AUTH_KEY);
+                const eth2 = getEthereumObject();
+                if (eth2) {
+                  try {
+                    const p2 = new ethers.BrowserProvider(eth2);
+                    const signer2 = await p2.getSigner();
+                    const ok = await verifySignature(signer2, newAddr);
+                    if (ok) {
+                      const [bal2, net2] = await Promise.all([
+                        p2.getBalance(newAddr),
+                        p2.getNetwork(),
+                      ]);
+                      setUser({ address: newAddr, nativeBalance: bal2, isConnected: true, chainId: net2.chainId });
+                      fetchUserVaults(newAddr, net2.chainId);
+                    } else {
+                      disconnectWallet();
+                    }
+                  } catch { disconnectWallet(); }
+                } else {
+                  disconnectWallet();
+                }
+              }
           }
       };
 

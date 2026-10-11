@@ -17,6 +17,8 @@ interface GasSeparationModalProps {
    *         User must first switch to an authorized wallet to sign.
    */
   isAlreadyAuthorized: boolean;
+  /** Native gas token ticker for the current chain (e.g. "ETH", "BNB", "MATIC") */
+  nativeTicker: string;
   onSuccess: (walletSig: string) => void;
   onCancel: () => void;
 }
@@ -30,6 +32,7 @@ const GasSeparationModal: React.FC<GasSeparationModalProps> = ({
   opHash,
   authorizedWallets,
   isAlreadyAuthorized,
+  nativeTicker,
   onSuccess,
   onCancel,
 }) => {
@@ -177,7 +180,7 @@ const GasSeparationModal: React.FC<GasSeparationModalProps> = ({
     ? `Signed by ${short(signerAddr)}`
     : isAlreadyAuthorized
       ? 'Your connected wallet is authorized. Click the button below to sign — no gas fee required.'
-      : 'In MetaMask, switch to an authorized wallet (no BNB needed). Then click the button below — only a signature is requested, no gas fee.';
+      : `In MetaMask, switch to an authorized wallet (no ${nativeTicker} needed). Then click the button below — only a signature is requested, no gas fee.`;
 
   return (
     <div className="fixed inset-0 z-[120] flex items-center justify-center p-4 sm:p-6 animate-fade-in">
@@ -283,8 +286,8 @@ const GasSeparationModal: React.FC<GasSeparationModalProps> = ({
                   {phase === 'signed'
                     ? gasWalletReady
                       ? `Using ${short(currentAddr)} to pay gas. Click Continue to submit.`
-                      : 'Switch MetaMask to any wallet that has BNB to pay gas.'
-                    : 'After signing, switch to any wallet with BNB to pay gas and submit the transaction.'}
+                      : `Switch MetaMask to any wallet that has ${nativeTicker} to pay gas.`
+                    : `After signing, switch to any wallet with ${nativeTicker} to pay gas and submit the transaction.`}
                 </div>
               </div>
             </div>

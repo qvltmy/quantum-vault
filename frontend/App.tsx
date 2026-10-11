@@ -288,9 +288,10 @@ function App() {
     isOpen: boolean;
     opHash: string;
     authorizedWallets: string[];
-    isAlreadyAuthorized: boolean;  // current wallet IS admin but lacks gas
+    isAlreadyAuthorized: boolean;
+    nativeTicker: string;
     onSigned: (sig: string) => void;
-  }>({ isOpen: false, opHash: '', authorizedWallets: [], isAlreadyAuthorized: false, onSigned: () => {} });
+  }>({ isOpen: false, opHash: '', authorizedWallets: [], isAlreadyAuthorized: false, nativeTicker: 'ETH', onSigned: () => {} });
 
   // New: Track last success time to auto-clear inputs
   const [lastSuccessTime, setLastSuccessTime] = useState(0);
@@ -1361,6 +1362,7 @@ function App() {
             opHash,
             authorizedWallets: knownAdmins,
             isAlreadyAuthorized: isCurrentWalletAdmin,
+            nativeTicker: CHAINS.find(c => BigInt(c.id) === user.chainId)?.ticker ?? 'ETH',
             onSigned: (sig) => {
               setGasSepModal(prev => ({ ...prev, isOpen: false }));
               resolve(sig);
@@ -1566,6 +1568,7 @@ function App() {
             opHash,
             authorizedWallets: knownAdmins,
             isAlreadyAuthorized: isWalletAdminAddrRotate,
+            nativeTicker: CHAINS.find(c => BigInt(c.id) === user.chainId)?.ticker ?? 'ETH',
             onSigned: (sig) => {
               setGasSepModal(prev => ({ ...prev, isOpen: false }));
               resolve(sig);
@@ -1786,6 +1789,7 @@ function App() {
         opHash={gasSepModal.opHash}
         authorizedWallets={gasSepModal.authorizedWallets}
         isAlreadyAuthorized={gasSepModal.isAlreadyAuthorized}
+        nativeTicker={gasSepModal.nativeTicker}
         onSuccess={(sig) => gasSepModal.onSigned(sig)}
         onCancel={() => {
           const reject = (window as any).__gasSepReject;

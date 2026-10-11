@@ -12,11 +12,18 @@ All contracts are verified on-chain. The same factory address is used across eve
 
 | Contract | Address |
 |---|---|
-| `QuantumVaultAccountFactory` | [`0xb473acF11db7F27F59213C7FE07D47d0eC569744`](https://etherscan.io/address/0xb473acF11db7F27F59213C7FE07D47d0eC569744#code) |
-| `QuantumVault` | [`0x19e1F8515d51375764cddac83B66dFb299e6898D`](https://etherscan.io/address/0x19e1F8515d51375764cddac83B66dFb299e6898D#code) |
-| `QuantumVaultAccount` | [`0x05395A5Ae7B25c70DEBF91c9F461135d184c9FEE`](https://etherscan.io/address/0x05395A5Ae7B25c70DEBF91c9F461135d184c9FEE#code) |
+| `QuantumVaultAccountFactory` | [`0x693671914331B6FaaCEeD66A805D33aa95D8808D`](https://etherscan.io/address/0x693671914331B6FaaCEeD66A805D33aa95D8808D#code) |
 
 **Supported networks:** Ethereum · BSC · Base · Arbitrum · Polygon · Robinhood Chain
+
+| Network | Verification |
+|---|---|
+| Ethereum | [Etherscan ✓](https://etherscan.io/address/0x693671914331B6FaaCEeD66A805D33aa95D8808D#code) |
+| BSC | [BscScan ✓](https://bscscan.com/address/0x693671914331B6FaaCEeD66A805D33aa95D8808D#code) |
+| Base | [BaseScan ✓](https://basescan.org/address/0x693671914331B6FaaCEeD66A805D33aa95D8808D#code) |
+| Arbitrum | [Arbiscan ✓](https://arbiscan.io/address/0x693671914331B6FaaCEeD66A805D33aa95D8808D#code) |
+| Polygon | [PolygonScan ✓](https://polygonscan.com/address/0x693671914331B6FaaCEeD66A805D33aa95D8808D#code) |
+| Robinhood Chain | [Sourcify ✓](https://sourcify.dev/#/lookup/0x693671914331B6FaaCEeD66A805D33aa95D8808D) |
 
 ---
 
@@ -25,24 +32,19 @@ All contracts are verified on-chain. The same factory address is used across eve
 ```
 QuantumVaultAccountFactory
 │
-└── creates ──▶ QuantumVaultAccount  (ERC-4337 Smart Account)
+└── creates ──▶ QuantumVaultAccount  (ERC-4337 Smart Account + Asset Vault)
                         │
-                        └── owns ──▶ QuantumVault  (asset vault)
-                                            │
-                                            └── verifies ──▶ WOTSVerifier
+                        └── verifies ──▶ WOTSVerifier
 ```
 
-### QuantumVault
-The core asset container. Accepts ETH and ERC-20 deposits from any address. Withdrawals are gated by WOTS+ signature verification — each signature is single-use and the on-chain Merkle root advances to the next key after every spend.
-
 ### QuantumVaultAccount
-An ERC-4337 compliant smart account that owns the vault. Supports gasless transactions via standard bundlers. Wallet admins are managed on-chain; the account enforces that only authorized signers can initiate vault operations.
+The core asset container and ERC-4337 smart account in one. Holds ETH and ERC-20 tokens directly. Withdrawals require dual-factor authentication: WOTS+ password proof (Factor 1) + wallet ECDSA signature (Factor 2). Each WOTS+ signature is single-use; the on-chain Merkle root advances after every spend.
 
 ### QuantumVaultAccountFactory
-Deterministic CREATE2 factory. Given an owner address and a salt, it always produces the same account and vault addresses — enabling address pre-computation before any funds are deposited.
+Deterministic CREATE2 factory. Given an owner address and an account index, it always produces the same account address — enabling address pre-computation before any funds are deposited.
 
 ### WOTSVerifier
-Pure on-chain implementation of the Winternitz One-Time Signature scheme. Accepts an optional SP1 zk-proof path for gas-efficient verification of larger signature sets.
+Pure on-chain implementation of the Winternitz One-Time Signature scheme. Verifies OTS signatures and Merkle proofs on-chain with no external dependencies.
 
 ---
 
@@ -55,16 +57,18 @@ Pure on-chain implementation of the Winternitz One-Time Signature scheme. Accept
 | Replay attacks | On-chain nonce + Merkle root advancement per spend |
 | Admin takeover | Multi-admin quorum, on-chain admin list, no off-chain delegation |
 | Front-running | Commitment scheme — signature is bound to a specific calldata hash |
+| Gas-free signing | Dual-factor: wallet signs off-chain, any address can submit |
 
 ---
 
 ## Compiler Settings
 
 ```toml
-solc       = "0.8.28"
-viaIR      = true
-optimizer  = true, 200 runs
-evmVersion = "cancun"
+solc          = "0.8.28"
+viaIR         = true
+optimizer     = true, 200 runs
+evmVersion    = "cancun"
+bytecodeHash  = "none"
 ```
 
 ---
@@ -73,16 +77,18 @@ evmVersion = "cancun"
 
 ```
 contracts/
-  QuantumVault.sol                — vault logic, WOTS+ verification, Merkle key rotation
-  QuantumVaultAccount.sol         — ERC-4337 smart account
+  QuantumVaultAccount.sol         — ERC-4337 smart account + asset vault (WOTS+ dual-factor)
   QuantumVaultAccountFactory.sol  — CREATE2 factory
-  WOTSVerifier.sol                — WOTS+ signature verifier with optional SP1 path
+  WOTSVerifier.sol                — WOTS+ signature verifier
 
 frontend/                         — React + Vite application
   App.tsx                         — root component, wallet + vault state
-  components/                     — UI components
-  services/                       — WOTS+ key generation workers
-  types.ts                        — chain config, ABI types
+  components/                     — UI components (Dashboard, modals)
+  services/                       — WOTS+ key generation workers, Relay/Blockscout services
+  types.ts                        — chain config, ABI types, factory address
+
+script/
+  Deploy.s.sol                    — Foundry deploy script (Nick's factory, deterministic)
 ```
 
 ---

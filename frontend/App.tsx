@@ -130,7 +130,7 @@ const STORAGE_DEMO_KEY      = 'quantum_demo_mode';    // persists demo mode acro
 // ── Demo vault (view-only, no wallet required) ────────────────────────────────
 const DEMO_VAULT_ADDR   = '0xC7c0eE115e37BD1626590196776F61D00e71772b';
 const DEMO_ACCOUNT_ADDR = '0xb2a05c3603e3b8bc478987656aaa3c703b752d50';
-const DEMO_RPC          = 'https://rpc.mainnet.chain.robinhood.com';
+const DEMO_RPC          = 'https://robinhood-rpc.publicnode.com';
 const DEMO_CHAIN_ID     = 4663n;
 
 // ── WOTS+ generation helpers ─────────────────────────────────────────────────
@@ -196,23 +196,35 @@ function App() {
     loadVaultAddress();
   }, [accountAddress, user.chainId, user.isConnected]);
   
-  // Fetch all vaults created by connected wallet from chain
-  const fetchUserVaults = async (userAddr: string) => {
+  // Fetch all vaults created by connected wallet from chain.
+  // chainIdOverride must be passed explicitly — do NOT rely on user.chainId closure,
+  // which is stale (0n) when called right after setUser() or from a pinned useCallback.
+  const fetchUserVaults = async (userAddr: string, chainIdOverride?: bigint) => {
     if (!userAddr) return;
     setIsFetchingVaults(true);
     try {
       const eth = getProviderObject(localStorage.getItem(STORAGE_WALLET_TYPE));
       if (!eth) return;
       const provider = new ethers.BrowserProvider(eth);
-      const factory = new ethers.Contract(getFactoryAddress(user.chainId), FACTORY_ABI, provider);
+      // Resolve chain: prefer explicit override, then ask provider (one extra RPC call)
+      const effectiveChainId = chainIdOverride ?? (await provider.getNetwork()).chainId;
+      const factory = new ethers.Contract(getFactoryAddress(effectiveChainId), FACTORY_ABI, provider);
       const accounts: string[] = await factory.getUserAccounts(userAddr);
-      if (!accounts || accounts.length === 0) { setIsFetchingVaults(false); return; }
-      const pairs = await Promise.all(accounts.map(async (acc: string) => {
-        const vault = await factory.accountToVault(acc);
-        return { account: acc, vault };
-      }));
-      setMyVaults(pairs);
-      localStorage.setItem(STORAGE_VAULTS_KEY, JSON.stringify(pairs));
+      if (!accounts || accounts.length === 0) { return; }
+      // Promise.allSettled: one failing accountToVault must not discard the rest
+      const settled = await Promise.allSettled(
+        accounts.map(async (acc: string) => {
+          const vault: string = await factory.accountToVault(acc);
+          return { account: acc, vault };
+        })
+      );
+      const pairs = settled
+        .filter((r): r is PromiseFulfilledResult<{ account: string; vault: string }> => r.status === 'fulfilled')
+        .map(r => r.value);
+      if (pairs.length > 0) {
+        setMyVaults(pairs);
+        localStorage.setItem(STORAGE_VAULTS_KEY, JSON.stringify(pairs));
+      }
     } catch (err) {
       console.error('fetchUserVaults error:', err);
     } finally {
@@ -466,7 +478,7 @@ function App() {
         wcProvider.on('disconnect', () => disconnectWallet());
 
         showToast(t('toast.connect_success'), 'success');
-        fetchUserVaults(address);
+        fetchUserVaults(address, network.chainId);
       } catch (e: any) {
         console.error(e);
         const msg = getFriendlyError(e);
@@ -560,7 +572,7 @@ function App() {
       ]);
       setUser({ address, nativeBalance: bal, isConnected: true, chainId: network.chainId });
       showToast(t('toast.connect_success'), "success");
-      fetchUserVaults(address);
+      fetchUserVaults(address, network.chainId);
     } catch (e: any) {
       console.error(e);
       const msg = getFriendlyError(e);
@@ -651,7 +663,7 @@ function App() {
            const bal = await provider.getBalance(address);
            const chainId = (await provider.getNetwork()).chainId;
            setUser({ address, nativeBalance: bal, isConnected: true, chainId });
-           fetchUserVaults(address);
+           fetchUserVaults(address, chainId);
         } else {
            localStorage.removeItem(STORAGE_AUTH_KEY);
         }
@@ -988,6 +1000,8 @@ function App() {
 
       setAccountAddress(resolvedAccount);
       setVaultAddress(resolvedVault);
+      setIsDemoMode(false);
+      localStorage.removeItem(STORAGE_DEMO_KEY);
       localStorage.setItem(STORAGE_VAULT_KEY, resolvedAccount);
       addToHistory(resolvedVault); // store vault address in history (what users know)
       handleNavigate('dashboard');

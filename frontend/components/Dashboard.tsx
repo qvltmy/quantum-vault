@@ -319,7 +319,7 @@ const Dashboard: React.FC<DashboardProps> = ({
       try {
         // Demo mode: no wallet connected — use a public RPC
         const provider = isDemo
-          ? new ethers.JsonRpcProvider('https://ethereum.publicnode.com')
+          ? new ethers.JsonRpcProvider('https://robinhood-rpc.publicnode.com')
           : new ethers.BrowserProvider((window as any).ethereum);
         const account = new ethers.Contract(accountAddress, [
           "function getWalletAdmins() view returns (address[])"
@@ -414,7 +414,7 @@ const Dashboard: React.FC<DashboardProps> = ({
         <div className="mb-4 flex items-center gap-3 px-4 py-3 rounded-2xl border border-amber-500/30 bg-amber-500/8 text-amber-200 text-xs font-bold">
           <AlertTriangle size={15} className="text-amber-400 shrink-0" />
           <span>
-            Demo vault — <span className="font-mono text-amber-100">0x19e1…898D</span> on Ethereum Mainnet.
+            Demo vault — <span className="font-mono text-amber-100">0xC7c0…772b</span> on Robinhood Chain.
             This is read-only. Connect your wallet to create or manage your own vault.
           </span>
         </div>
@@ -884,7 +884,9 @@ const Dashboard: React.FC<DashboardProps> = ({
                       if (!accountAddress) return;
                       setIsLoadingPermissions(true);
                       setAdminList([]);
-                      const provider = new ethers.BrowserProvider((window as any).ethereum);
+                      const provider = isDemo
+                        ? new ethers.JsonRpcProvider('https://robinhood-rpc.publicnode.com')
+                        : new ethers.BrowserProvider((window as any).ethereum);
                       const acct = new ethers.Contract(accountAddress, [
                         "function getWalletAdmins() view returns (address[])"
                       ], provider);

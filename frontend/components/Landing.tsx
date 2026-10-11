@@ -108,7 +108,7 @@ const renderWithRefs = (text: string): React.ReactNode => {
 
 interface VaultEntry { account: string; vault: string; label?: string; }
 
-const DEMO_VAULT_ADDR = '0x19e1F8515d51375764cddac83B66dFb299e6898D';
+const DEMO_VAULT_ADDR = '0xC7c0eE115e37BD1626590196776F61D00e71772b';
 
 interface LandingProps {
   onLoadVault: (address: string) => void;

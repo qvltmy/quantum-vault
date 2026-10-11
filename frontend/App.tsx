@@ -1906,7 +1906,7 @@ function App() {
               onConnect={() => setShowWalletModal(true)}
               onDeposit={handleInitiateDeposit}
               onInitiateWithdraw={handleInitiateWithdraw}
-              onSwap={() => setShowSwapModal(true)}
+              onSwapConfirm={handleSwapConfirm}
               onRotateEcdsaSigner={(newPw: string, currentPw: string) => handleRotateEcdsaSigner(newPw, currentPw)}
               onSecureAction={(desc, action) => setShowPwModal({ isOpen: true, action: isDemoMode ? executeDemoVerify : action, desc })}
               onAddAdmin={handleAddAdmin}

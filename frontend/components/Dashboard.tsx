@@ -20,7 +20,7 @@ interface DashboardProps {
   onConnect: () => void;
   onDeposit: (amount: string, token: string, symbol: string, isCustom: boolean) => void; 
   onInitiateWithdraw: (amount: string, to: string, token: string, symbol: string) => void;
-  onSwap: () => void;
+  onSwapConfirm: (quote: import('../services/relayService').RelayQuote, originCurrency: string, amount: bigint) => void;
   onRotateEcdsaSigner: (newPw: string, currentPw: string) => Promise<void>;
   onSecureAction: (desc: string, action: (pw: string) => Promise<void>) => void;
   onAddAdmin: (adminAddr: string, pw: string) => Promise<void>;
@@ -111,7 +111,7 @@ const Dashboard: React.FC<DashboardProps> = ({
   onDeposit, onInitiateWithdraw, onRotateEcdsaSigner,
   onSecureAction, onAddAdmin, onRemoveAdmin,
   loading, fetchUserTokenBalance, checkIsAuthorizer, isRestoring, lastSuccessTime,
-  isDemo = false, onSwap
+  isDemo = false, onSwapConfirm
 }) => {
   const [activeTab, setActiveTab] = useState<'deposit' | 'withdraw' | 'swap' | 'admin'>('deposit');
   
@@ -134,7 +134,22 @@ const Dashboard: React.FC<DashboardProps> = ({
   const [isAssetDropdownOpen, setIsAssetDropdownOpen] = useState(false);
   const assetDropdownRef = useRef<HTMLDivElement>(null);
   
-  // Admin Form States
+  // ── Swap State ──────────────────────────────────────────────────────────────
+  const [swapOriginAddr, setSwapOriginAddr] = useState('');          // '' = native ETH
+  const [swapAmount, setSwapAmount] = useState('');
+  const [swapDestChains, setSwapDestChains] = useState<import('../services/relayService').RelayChain[]>([]);
+  const [swapDestChain, setSwapDestChain] = useState<import('../services/relayService').RelayChain | null>(null);
+  const [swapDestCurrencies, setSwapDestCurrencies] = useState<import('../services/relayService').RelayCurrency[]>([]);
+  const [swapDestCurrency, setSwapDestCurrency] = useState<import('../services/relayService').RelayCurrency | null>(null);
+  const [swapQuote, setSwapQuote] = useState<import('../services/relayService').RelayQuote | null>(null);
+  const [swapQuoteError, setSwapQuoteError] = useState<string | null>(null);
+  const [swapQuoting, setSwapQuoting] = useState(false);
+  const [swapChainPickerOpen, setSwapChainPickerOpen] = useState(false);
+  const [swapDestCurrencyPickerOpen, setSwapDestCurrencyPickerOpen] = useState(false);
+  const [swapOriginPickerOpen, setSwapOriginPickerOpen] = useState(false);
+  const swapChainPickerRef = useRef<HTMLDivElement>(null);
+  const swapDestCurrencyPickerRef = useRef<HTMLDivElement>(null);
+  const swapOriginPickerRef = useRef<HTMLDivElement>(null);
   const [newPw, setNewPw] = useState("");
   const [newPwConfirm, setNewPwConfirm] = useState("");
 
@@ -181,6 +196,78 @@ const Dashboard: React.FC<DashboardProps> = ({
     document.addEventListener("mousedown", handleClickOutside);
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
+
+  // ── Swap: close dropdowns on outside click ───────────────────────────────
+  useEffect(() => {
+    const handle = (e: MouseEvent) => {
+      if (swapChainPickerRef.current && !swapChainPickerRef.current.contains(e.target as Node)) setSwapChainPickerOpen(false);
+      if (swapDestCurrencyPickerRef.current && !swapDestCurrencyPickerRef.current.contains(e.target as Node)) setSwapDestCurrencyPickerOpen(false);
+      if (swapOriginPickerRef.current && !swapOriginPickerRef.current.contains(e.target as Node)) setSwapOriginPickerOpen(false);
+    };
+    document.addEventListener('mousedown', handle);
+    return () => document.removeEventListener('mousedown', handle);
+  }, []);
+
+  // ── Swap: load chains when tab opens ────────────────────────────────────
+  useEffect(() => {
+    if (activeTab !== 'swap' || swapDestChains.length > 0) return;
+    import('../services/relayService').then(({ getRelayChains, ROBINHOOD_CHAIN_ID }) => {
+      getRelayChains().then(all => {
+        const filtered = all.filter((c: import('../services/relayService').RelayChain) => c.id !== ROBINHOOD_CHAIN_ID);
+        setSwapDestChains(filtered);
+        const base = filtered.find((c: import('../services/relayService').RelayChain) => c.id === 8453) ?? filtered[0];
+        setSwapDestChain(base ?? null);
+      }).catch(() => {});
+    });
+  }, [activeTab, swapDestChains.length]);
+
+  // ── Swap: load dest currencies when chain changes ───────────────────────
+  useEffect(() => {
+    if (!swapDestChain) return;
+    setSwapDestCurrencies([]);
+    setSwapDestCurrency(null);
+    import('../services/relayService').then(({ getRelayCurrencies }) => {
+      getRelayCurrencies(swapDestChain.id).then(list => {
+        setSwapDestCurrencies(list);
+        const eth = list.find((c: import('../services/relayService').RelayCurrency) => c.address === '0x0000000000000000000000000000000000000000') ?? list[0];
+        setSwapDestCurrency(eth ?? null);
+      }).catch(() => {});
+    });
+  }, [swapDestChain]);
+
+  // ── Swap: fetch quote (debounced) ────────────────────────────────────────
+  useEffect(() => {
+    if (activeTab !== 'swap') return;
+    if (!swapDestChain || !swapDestCurrency || !swapAmount || parseFloat(swapAmount) <= 0) {
+      setSwapQuote(null); setSwapQuoteError(null); return;
+    }
+    const decimals = swapOriginAddr
+      ? (vaultState?.vaultTokens.find(t => t.address.toLowerCase() === swapOriginAddr.toLowerCase())?.decimals ?? 18)
+      : 18;
+    let amountWei: bigint;
+    try { amountWei = ethers.parseUnits(swapAmount, decimals); } catch { return; }
+    if (amountWei <= 0n) return;
+    const vaultAddr = vaultState?.vaultAddress;
+    if (!vaultAddr) return;
+
+    const timer = setTimeout(() => {
+      setSwapQuoting(true); setSwapQuoteError(null); setSwapQuote(null);
+      import('../services/relayService').then(({ getRelayQuote, ROBINHOOD_CHAIN_ID }) => {
+        getRelayQuote({
+          user: vaultAddr,
+          recipient: vaultAddr,
+          originChainId: ROBINHOOD_CHAIN_ID,
+          destinationChainId: swapDestChain.id,
+          originCurrency: swapOriginAddr || '0x0000000000000000000000000000000000000000',
+          destinationCurrency: swapDestCurrency.address,
+          amount: amountWei.toString(),
+        }).then(q => { setSwapQuote(q); }).catch((e: any) => {
+          setSwapQuoteError(e?.message ?? 'Failed to get quote');
+        }).finally(() => setSwapQuoting(false));
+      });
+    }, 600);
+    return () => clearTimeout(timer);
+  }, [activeTab, swapDestChain, swapDestCurrency, swapAmount, swapOriginAddr, vaultState]);
 
 
   useEffect(() => {
@@ -507,7 +594,7 @@ const Dashboard: React.FC<DashboardProps> = ({
       <div className="p-1.5 mb-6 flex bg-[#0b1424]/80 backdrop-blur-xl rounded-2xl border border-cyan-100/[0.11] shadow-2xl overflow-x-auto no-scrollbar gap-1 max-w-2xl mx-auto">
          <TabButton active={activeTab === 'deposit'} onClick={() => setActiveTab('deposit')} icon={<ArrowDownToLine size={16}/>} label={t('dash.tab.deposit')} />
          <TabButton active={activeTab === 'withdraw'} onClick={() => setActiveTab('withdraw')} icon={<ArrowRightLeft size={16}/>} label={t('dash.tab.withdraw')} />
-         <TabButton active={activeTab === 'swap'} onClick={() => { setActiveTab('swap'); onSwap?.(); }} icon={<ArrowDownUp size={16}/>} label="Swap" />
+         <TabButton active={activeTab === 'swap'} onClick={() => setActiveTab('swap')} icon={<ArrowDownUp size={16}/>} label="Swap" />
          {true && (
             <TabButton active={activeTab === 'admin'} onClick={() => setActiveTab('admin')} icon={<Settings size={16}/>} label={t('dash.tab.admin')} />
          )}
@@ -868,6 +955,266 @@ const Dashboard: React.FC<DashboardProps> = ({
                  </div>
               </div>
            </div>
+        )}
+
+        {activeTab === 'swap' && (
+          <div className="glass-card quantum-card quantum-edge rounded-[2.5rem] p-6 md:p-12 relative overflow-visible">
+            <div className="absolute top-0 right-0 w-[600px] h-[600px] bg-violet-500/5 rounded-full blur-[120px] -mr-32 -mt-32 pointer-events-none"></div>
+
+            <div className="max-w-3xl mx-auto space-y-8 md:space-y-10 relative z-10">
+              {/* Header */}
+              <div className="text-center space-y-3">
+                <h3 className="text-3xl font-bold text-white">Swap &amp; Bridge</h3>
+                <div className="flex items-center justify-center gap-2 mt-2 bg-violet-950/40 w-fit mx-auto px-4 py-1.5 rounded-full border border-violet-500/20">
+                  <ArrowDownUp size={14} className="text-violet-300"/>
+                  <p className="text-xs text-violet-200 font-bold tracking-wide">Powered by Relay Protocol</p>
+                </div>
+              </div>
+
+              <div className="space-y-5">
+                {/* ── Origin ─────────────────────────────────────────────── */}
+                <div>
+                  <div className="flex items-center justify-between mb-3 px-1">
+                    <label className="text-xs font-bold text-slate-400 uppercase tracking-wider">From Vault</label>
+                    {(() => {
+                      const origin = swapOriginAddr
+                        ? vaultState?.vaultTokens.find(t => t.address.toLowerCase() === swapOriginAddr.toLowerCase())
+                        : null;
+                      const bal = swapOriginAddr
+                        ? (origin ? parseFloat(ethers.formatUnits(origin.balance, origin.decimals)).toFixed(4) : '0')
+                        : parseFloat(ethers.formatEther(vaultState?.nativeBalance ?? 0n)).toFixed(4);
+                      const sym = swapOriginAddr ? (origin?.symbol ?? '?') : nativeTicker;
+                      return (
+                        <button
+                          onClick={() => {
+                            const decimals = swapOriginAddr ? (origin?.decimals ?? 18) : 18;
+                            const max = swapOriginAddr
+                              ? (origin ? ethers.formatUnits(origin.balance, decimals) : '0')
+                              : ethers.formatEther(vaultState?.nativeBalance ?? 0n);
+                            setSwapAmount(parseFloat(max).toFixed(6).replace(/\.?0+$/, ''));
+                          }}
+                          className="text-[10px] font-bold text-violet-300 bg-violet-500/10 border border-violet-500/20 px-3 py-1.5 rounded-lg hover:bg-violet-500/20 transition-colors flex items-center gap-1.5"
+                        >
+                          <Coins size={10}/> Max: {bal} {sym}
+                        </button>
+                      );
+                    })()}
+                  </div>
+
+                  <div className="grid grid-cols-[1fr_auto] gap-3">
+                    {/* Amount input */}
+                    <div className="relative group">
+                      <input
+                        type="number"
+                        min="0"
+                        value={swapAmount}
+                        onChange={e => setSwapAmount(e.target.value)}
+                        placeholder="0.00"
+                        className="glass-input w-full h-16 md:h-20 pl-6 pr-4 rounded-2xl text-3xl md:text-4xl font-mono text-white placeholder-slate-800 transition-all shadow-inner bg-[#050914]/50 border-cyan-100/[0.16] focus:ring-2 focus:ring-violet-500/30"
+                      />
+                    </div>
+
+                    {/* Origin token selector */}
+                    <div className="relative" ref={swapOriginPickerRef}>
+                      <button
+                        onClick={() => setSwapOriginPickerOpen(v => !v)}
+                        className="glass-input quantum-control h-16 md:h-20 px-4 rounded-2xl flex flex-col items-center justify-center gap-1 bg-[#050914]/50 border-cyan-100/[0.16] hover:bg-[#0c1d30]/80 transition-colors min-w-[90px]"
+                      >
+                        <span className="text-sm font-bold text-white">
+                          {swapOriginAddr
+                            ? (vaultState?.vaultTokens.find(t => t.address.toLowerCase() === swapOriginAddr.toLowerCase())?.symbol ?? '?')
+                            : nativeTicker}
+                        </span>
+                        <ChevronDown size={12} className="text-slate-400"/>
+                      </button>
+                      {swapOriginPickerOpen && (
+                        <div className="absolute top-full right-0 mt-2 w-52 bg-[#0b1424] border border-cyan-100/[0.16] rounded-2xl shadow-2xl z-50 animate-fade-in overflow-hidden">
+                          <div className="max-h-52 overflow-y-auto custom-scrollbar p-2 space-y-1">
+                            {/* Native */}
+                            <button
+                              onClick={() => { setSwapOriginAddr(''); setSwapOriginPickerOpen(false); setSwapAmount(''); }}
+                              className={`w-full flex items-center justify-between p-3 rounded-xl text-sm transition-all ${swapOriginAddr === '' ? 'bg-violet-600 text-white' : 'text-slate-300 hover:bg-[#0c1d30]/80 hover:text-white'}`}
+                            >
+                              <span className="font-bold">{nativeTicker}</span>
+                              <span className="font-mono text-xs opacity-80">
+                                {parseFloat(ethers.formatEther(vaultState?.nativeBalance ?? 0n)).toFixed(4)}
+                              </span>
+                            </button>
+                            {/* Vault tokens with balance */}
+                            {vaultState?.vaultTokens.filter(t => (t.balance ?? 0n) > 0n).map(t => (
+                              <button
+                                key={t.address}
+                                onClick={() => { setSwapOriginAddr(t.address); setSwapOriginPickerOpen(false); setSwapAmount(''); }}
+                                className={`w-full flex items-center justify-between p-3 rounded-xl text-sm transition-all ${swapOriginAddr.toLowerCase() === t.address.toLowerCase() ? 'bg-violet-600 text-white' : 'text-slate-300 hover:bg-[#0c1d30]/80 hover:text-white'}`}
+                              >
+                                <span className="font-bold">{t.symbol}</span>
+                                <span className="font-mono text-xs opacity-80">
+                                  {parseFloat(ethers.formatUnits(t.balance, t.decimals)).toFixed(4)}
+                                </span>
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                {/* ── Arrow separator ────────────────────────────────────── */}
+                <div className="flex items-center gap-3">
+                  <div className="flex-1 h-px bg-gradient-to-r from-transparent via-violet-500/20 to-transparent"></div>
+                  <div className="w-9 h-9 rounded-full bg-[#0b1424] border border-violet-500/20 flex items-center justify-center shadow-lg">
+                    <ArrowDownUp size={15} className="text-violet-400"/>
+                  </div>
+                  <div className="flex-1 h-px bg-gradient-to-r from-transparent via-violet-500/20 to-transparent"></div>
+                </div>
+
+                {/* ── Destination ────────────────────────────────────────── */}
+                <div>
+                  <label className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3 block px-1">To</label>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    {/* Destination chain */}
+                    <div className="relative" ref={swapChainPickerRef}>
+                      <button
+                        onClick={() => setSwapChainPickerOpen(v => !v)}
+                        className="glass-input quantum-control w-full h-16 px-5 rounded-2xl flex items-center justify-between bg-[#050914]/50 border-cyan-100/[0.16] hover:bg-[#0c1d30]/80 transition-colors group"
+                      >
+                        <div className="flex items-center gap-3">
+                          {swapDestChain?.iconUrl && <img src={swapDestChain.iconUrl} className="w-5 h-5 rounded-full" alt=""/>}
+                          <div className="text-left">
+                            <div className="text-[10px] text-slate-500 font-bold uppercase tracking-wider">Chain</div>
+                            <div className="text-sm font-bold text-white">{swapDestChain ? swapDestChain.displayName : <span className="text-slate-500">Loading…</span>}</div>
+                          </div>
+                        </div>
+                        <ChevronDown size={16} className="text-slate-400 group-hover:text-white transition-colors"/>
+                      </button>
+                      {swapChainPickerOpen && (
+                        <div className="absolute top-full left-0 right-0 mt-2 bg-[#0b1424] border border-cyan-100/[0.16] rounded-2xl shadow-2xl z-50 animate-fade-in overflow-hidden">
+                          <div className="max-h-52 overflow-y-auto custom-scrollbar p-2 space-y-1">
+                            {swapDestChains.length === 0 && (
+                              <div className="flex items-center justify-center py-6 gap-2 text-slate-500 text-xs">
+                                <Loader2 size={13} className="animate-spin"/> Loading chains…
+                              </div>
+                            )}
+                            {swapDestChains.map(c => (
+                              <button
+                                key={c.id}
+                                onClick={() => { setSwapDestChain(c); setSwapChainPickerOpen(false); }}
+                                className={`w-full flex items-center gap-3 p-3 rounded-xl text-sm transition-all ${c.id === swapDestChain?.id ? 'bg-violet-600 text-white' : 'text-slate-300 hover:bg-[#0c1d30]/80 hover:text-white'}`}
+                              >
+                                {c.iconUrl && <img src={c.iconUrl} className="w-5 h-5 rounded-full shrink-0" alt=""/>}
+                                <span className="font-bold">{c.displayName}</span>
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Destination token */}
+                    <div className="relative" ref={swapDestCurrencyPickerRef}>
+                      <button
+                        onClick={() => setSwapDestCurrencyPickerOpen(v => !v)}
+                        disabled={swapDestCurrencies.length === 0}
+                        className="glass-input quantum-control w-full h-16 px-5 rounded-2xl flex items-center justify-between bg-[#050914]/50 border-cyan-100/[0.16] hover:bg-[#0c1d30]/80 transition-colors group disabled:opacity-50"
+                      >
+                        <div className="flex items-center gap-3">
+                          {swapDestCurrency?.metadata?.logoURI && <img src={swapDestCurrency.metadata.logoURI} className="w-5 h-5 rounded-full" alt=""/>}
+                          <div className="text-left">
+                            <div className="text-[10px] text-slate-500 font-bold uppercase tracking-wider">Receive</div>
+                            <div className="text-sm font-bold text-white">
+                              {swapDestCurrency ? swapDestCurrency.symbol : <span className="text-slate-500">Loading…</span>}
+                            </div>
+                          </div>
+                        </div>
+                        <ChevronDown size={16} className="text-slate-400 group-hover:text-white transition-colors"/>
+                      </button>
+                      {swapDestCurrencyPickerOpen && (
+                        <div className="absolute top-full left-0 right-0 mt-2 bg-[#0b1424] border border-cyan-100/[0.16] rounded-2xl shadow-2xl z-50 animate-fade-in overflow-hidden">
+                          <div className="max-h-52 overflow-y-auto custom-scrollbar p-2 space-y-1">
+                            {swapDestCurrencies.map(c => (
+                              <button
+                                key={c.address}
+                                onClick={() => { setSwapDestCurrency(c); setSwapDestCurrencyPickerOpen(false); }}
+                                className={`w-full flex items-center gap-3 p-3 rounded-xl text-sm transition-all ${c.address === swapDestCurrency?.address ? 'bg-violet-600 text-white' : 'text-slate-300 hover:bg-[#0c1d30]/80 hover:text-white'}`}
+                              >
+                                {c.metadata?.logoURI && <img src={c.metadata.logoURI} className="w-5 h-5 rounded-full shrink-0" alt=""/>}
+                                <span className="font-bold">{c.symbol}</span>
+                                <span className="text-xs opacity-60 truncate">{c.name}</span>
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                {/* ── Quote result ────────────────────────────────────────── */}
+                {swapQuoting && (
+                  <div className="flex items-center gap-2 text-xs text-slate-400 px-1">
+                    <Loader2 size={13} className="animate-spin"/> Fetching best route…
+                  </div>
+                )}
+                {swapQuoteError && (
+                  <div className="flex items-center gap-2 text-xs text-red-400 bg-red-500/10 border border-red-500/20 rounded-2xl px-4 py-3">
+                    <AlertTriangle size={13} className="shrink-0"/> {swapQuoteError}
+                  </div>
+                )}
+                {swapQuote && !swapQuoting && (
+                  <div className="rounded-2xl border border-violet-500/20 bg-violet-950/20 p-5 space-y-3">
+                    <div className="flex items-center gap-2 mb-1">
+                      <div className="p-1.5 rounded-lg bg-violet-500/10 text-violet-300"><CheckCircle2 size={14}/></div>
+                      <span className="text-xs font-bold text-violet-200 uppercase tracking-widest">Route Found</span>
+                    </div>
+                    <div className="grid grid-cols-2 gap-x-6 gap-y-2 text-xs">
+                      <div className="text-slate-400">You receive</div>
+                      <div className="text-right font-bold text-white text-sm">
+                        {swapQuote.details.currencyOut.amountFormatted} {swapQuote.details.currencyOut.currency.symbol}
+                      </div>
+                      <div className="text-slate-400">On</div>
+                      <div className="text-right text-slate-300 font-medium">{swapDestChain?.displayName}</div>
+                      <div className="text-slate-400">Relay fee</div>
+                      <div className="text-right text-slate-300">
+                        {swapQuote.fees.relayer.amountFormatted} {swapQuote.fees.relayer.currency.symbol}
+                        <span className="text-slate-500 ml-1">(~${swapQuote.fees.relayer.amountUsd})</span>
+                      </div>
+                      {swapQuote.details.timeEstimate && (
+                        <>
+                          <div className="text-slate-400">Est. time</div>
+                          <div className="text-right text-slate-300">{Math.ceil(swapQuote.details.timeEstimate / 60)}m</div>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {/* ── Confirm button ─────────────────────────────────────── */}
+                <button
+                  onClick={() => {
+                    if (!swapQuote || !swapDestCurrency) return;
+                    const decimals = swapOriginAddr
+                      ? (vaultState?.vaultTokens.find(t => t.address.toLowerCase() === swapOriginAddr.toLowerCase())?.decimals ?? 18)
+                      : 18;
+                    let amountWei: bigint;
+                    try { amountWei = ethers.parseUnits(swapAmount, decimals); } catch { return; }
+                    onSwapConfirm(swapQuote, swapOriginAddr || '0x0000000000000000000000000000000000000000', amountWei);
+                  }}
+                  disabled={loading || !swapQuote || swapQuoting || !swapAmount || parseFloat(swapAmount) <= 0}
+                  className="w-full h-14 md:h-16 rounded-2xl bg-gradient-to-r from-violet-600 to-purple-600 hover:from-violet-500 hover:to-purple-500 text-white font-bold transition-all shadow-xl shadow-violet-900/30 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-3 text-base uppercase tracking-widest active:scale-[0.98]"
+                >
+                  {loading ? <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin"/> : <ArrowDownUp size={20}/>}
+                  <span>{swapDestChain?.id === 4663 ? 'Swap' : 'Bridge & Swap'}</span>
+                </button>
+
+                <PrincipleCard
+                  type="info"
+                  title="Non-custodial cross-chain"
+                  desc="Your assets never leave your vault until the dual-factor signed transaction is submitted. Relay solvers fulfill the trade atomically."
+                />
+              </div>
+            </div>
+          </div>
         )}
 
         {activeTab === 'admin' && (
